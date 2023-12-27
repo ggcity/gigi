@@ -1,0 +1,6 @@
+langchain
+unstructured
+transformers
+nest_asyncio
+chromadb
+fastembed
