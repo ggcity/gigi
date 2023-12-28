@@ -1,6 +1,6 @@
-langchain
-unstructured
+langchain==0.0.348
 transformers
 nest_asyncio
 chromadb
 fastembed
+gradio
