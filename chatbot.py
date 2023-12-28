@@ -10,6 +10,8 @@ from langchain.embeddings import FastEmbedEmbeddings, OllamaEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores.utils import filter_complex_metadata
 
+from langchain.callbacks.manager import CallbackManager
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.chat_models import ChatOllama
@@ -20,10 +22,22 @@ class Gigi:
 
     def __init__(self, model_name):
         docs = []
-        chroma_db_dir = "./chroma_db_" + model_name
+        chroma_db_dir = "./chroma_db"
 
         #embeddings = OllamaEmbeddings(model=model_name)
         embeddings = FastEmbedEmbeddings()
+        model = ChatOllama(model=model_name, callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]))
+        prompt = PromptTemplate.from_template(
+            """
+            <s> [INST] You are Gigi, a bubbly assistant for answering questions about the City of Garden Grove. 
+            Use the following retrieved context to answer the questions. If you unsure of the answer, 
+            just say that you don't know. If the question is irrelevent to the City of Garden Grove, 
+            refuse to answer. Keep the answers concise. Don't ask for follow up questions [/INST] </s> 
+            [INST] Question: {question} 
+            Context: {context} 
+            Answer: [/INST]
+            """
+        )
 
         # if db has been persisted, use it
         if os.path.exists(chroma_db_dir):
@@ -60,22 +74,15 @@ class Gigi:
             },
         )
 
-        model = ChatOllama(model=model_name)
-        prompt = PromptTemplate.from_template(
-            """
-            <s> [INST] You are Gigi, an assistant for answering questions about the City of Garden Grove. 
-            Use the following retrieved context to answer the questions. If you unsure of the answer, 
-            just say that you don't know. If the question is irrelevent to the City of Garden Grove, 
-            refuse to answer. Keep the answers concise. [/INST] </s> 
-            [INST] Question: {question} 
-            Context: {context} 
-            Answer: [/INST]
-            """
+        self.chain = (
+            {"context": retriever, "question": RunnablePassthrough()}
+            | prompt
+            | model
+            | StrOutputParser()
         )
-        self.chain = ({"context": retriever, "question": RunnablePassthrough()}
-                            | prompt
-                            | model
-                            | StrOutputParser())
 
     def chat(self, msg):
         return self.chain.invoke(msg)
+
+    def stream(self, msg):
+        return self.chain.stream(msg)
