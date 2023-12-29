@@ -22,6 +22,9 @@ Then open up to `http://localhost:7860`
 ## Sample responses
 
 ```
+>>> from chatbot import Gigi
+>>> gigi = Gigi("llama2:13b-chat")
+
 >>> gigi.chat("who is the city manager?")
 ' Lisa Kim is the City Manager of Garden Grove.'
 
