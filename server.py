@@ -12,7 +12,7 @@ def talk_to_gigi(message, history):
 gigi = Gigi("llama2:13b-chat")
 demo = gr.ChatInterface(
     talk_to_gigi, 
-    chatbot=gr.Chatbot(height=800),
+    chatbot=gr.Chatbot(height="50vh"),
     title="Gigi - Garden Grove Assistant"
 ).queue()
 
