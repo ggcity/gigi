@@ -1,0 +1,17 @@
+# City RAG Chatbot Requirements (local edition)
+# gradio 4.44 pins an old huggingface_hub (needs HfFolder) that conflicts with
+# sentence-transformers in the same environment. Use gradio 5+ (tested on 6.x).
+gradio>=5
+
+# Claude via the Anthropic API
+# Tested against anthropic 0.109.x; the messages.stream()/text_stream interface
+# used here has been stable across recent versions. Lock to what installs.
+anthropic>=0.39
+
+# Local vector store + embeddings (must match the crawler)
+chromadb>=0.5
+sentence-transformers>=2.7.0
+
+# CPU-only torch on a no-GPU box:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
