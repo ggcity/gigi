@@ -1,0 +1,18 @@
+# Website Crawler Requirements (local edition)
+# Crawling + parsing
+aiohttp==3.9.1
+aiofiles==23.2.1
+beautifulsoup4==4.12.2
+lxml
+PyPDF2==3.0.1
+python-docx==1.1.0
+
+# Local vector store + embeddings
+# Loose pins: lock these to whatever installs cleanly on your VM, then freeze.
+chromadb>=0.5
+sentence-transformers>=2.7.0
+
+# torch is pulled in by sentence-transformers. On a no-GPU Linux box, install
+# the CPU-only wheel to avoid downloading large CUDA libraries:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2

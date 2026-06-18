@@ -1,87 +1,206 @@
-# Gigi - GG Chatbot
+# City Website RAG Chatbot (Local Edition)
+
+A RAG chatbot that helps residents navigate city services. This edition runs
+the vector store and embeddings locally and calls Claude over the Anthropic API.
+
+## Architecture
+
+- Crawler (`website_crawler.py`): crawls a city website, extracts text + factual
+  metadata (dates, PII heuristic, URL stats), embeds chunks, stores in Chroma
+- Classifier (`classify.py`): a separate, re-runnable LLM pass that labels each
+  page (document type, department, record status) for retention review
+- Vector store: Chroma (local, persistent directory)
+- Embeddings: BGE-large (`BAAI/bge-large-en-v1.5`) via sentence-transformers
+- Chatbot ("Gigi", `city_chatbot.py`): conversational assistant. Answers with
+  Claude Sonnet 4.6 (`claude-sonnet-4-6`); a cheap Haiku call rewrites follow-ups
+  into standalone search queries so multi-turn context works
+- Interface: Gradio with streaming responses
+
+`rag_embeddings.py` is shared by the crawler and chatbot so the embedding model,
+dimension, normalization, and query handling cannot drift apart.
 
 ## Prerequisites
 
-You'll need `ollama` and a model installed. I've tested with Dolphin Mistral 7B and Llama 2 13B-chat. The latter seems to give more detailed answers.
+- Python 3.9+
+- An Anthropic API key
+- About 1.3GB of disk for the BGE-large weights (downloaded on first run)
+- GPU optional. CPU works; a GPU mainly speeds up the one-time crawl embedding.
 
-## Training data
+## Setup
 
-Not really training, just RAG. Data are pulled from City's website via sitemap.xml.
+Install torch first, matched to your hardware, then the rest.
 
-## Get started
+CPU-only box:
 
-```
-$ python -m venv venv
-$ source venv/bin/activate
-$ pip install -r requirements.txt
-$ python server.py
-```
-
-Then open up to `http://localhost:7860`
-
-## Sample responses
-
-```
->>> from chatbot import Gigi
->>> gigi = Gigi("llama2:13b-chat")
-
->>> gigi.chat("who is the city manager?")
-' Lisa Kim is the City Manager of Garden Grove.'
-
->>> gigi.chat("how can i pay water bill?")
-" To pay your water bill, you can call (888) 867-2992 or visit the Water Billing section of the City of Garden Grove's website at https://ggcity.org/finance/water-billing. You can also start water service by calling Water Billing at (714) 741-5078, providing your information, and making a deposit if necessary."
-
->>> gigi.chat("how can i get in touch with code enforcement?")
-' To get in touch with code enforcement, you can contact them by phone at (714) 741-5358 or send an email to codeenforcement@ggcity.org. You can also visit the Garden Grove City Hall at 11222 Acacia Parkway, Garden Grove, CA 92840 during their regular hours of operation: Monday through Thursday from 7:30 AM to 5:30 PM and alternating Fridays from 7:30 AM to 5:00 PM (closed on December 25-January 1).'
-
->>> gigi.chat("how do i apply for a job?")
-' To apply for a job in Garden Grove, first you need to meet one of the following requirements: (a) be a senior in high school, (b) have a high school diploma, GED, or equivalent, (c) have a high school diploma, GED, or equivalent and enrolling in college in the next possible school term, or (d) be currently enrolled in college.
-
-If you are interested in joining the police department, follow the hiring process which includes an application screening, written test (POST PELLETB), interview, background check, pre-employment medical examination. The selection process takes approximately 180 days from initial application to final selection/hiring.
-
-For other job opportunities in Garden Grove, apply online or contact the appropriate department. Some departments may require additional qualifications and training'
-
->>> gigi.chat("i got a notice of violation. what do i do?")
-" Based on the provided context, I can assist you with answering questions related to the City of Garden Grove's code enforcement and compliance processes.
-
-Question: What should I do if I receive a notice of violation?
-
-Answer: If you receive a notice of violation from the City of Garden Grove, you should take immediate action to resolve the issue and avoid further penalties. The notice will provide instructions on how to comply with the code violation, and you may be given a deadline to complete the necessary corrections. It is essential to take the notice seriously and respond promptly to avoid additional fines or legal action.
-
-If you have any questions or concerns about the notice of violation, you can contact the City of Garden Grove's Code Enforcement Department for assistance. They can provide information on how to resolve the issue and answer any questions you may have."
-
->>> gigi.chat("what are the requirements to build ADU?")
-" Sure! Based on the provided context, I can answer your question.
-
-To build an Accessory Dwelling Unit (ADU) in the City of Garden Grove, there are several requirements you need to be aware of. Here is a list of some of the key requirements:
-
-1. Zoning Requirements: ADUs are subject to the same zoning requirements as the primary residence on the property. You can check the zoning map and the City's Zoning Ordinance to determine if your property is zoned for ADUs.
-2. Building Codes: ADUs must comply with all applicable building codes, including the California Building Standards Code and the International Building Code.
-3. Permit Requirements: You will need to obtain a building permit before constructing an ADU. The City of Garden Grove has a checklist of submittal requirements for ADU projects, which includes a completed application, site plan, electrical plan, and other documents.
-4. Parking Requirements: ADUs are subject to the City's parking requirements, which may vary depending on the location and size of the unit.
-5. Environmental Review: The City of Garden Grove requires an environmental review for ADU projects to ensure compliance with the California Environmental Quality Act (CEQA).
-6. Landscaping Requirements: ADUs must meet the City's landscaping requirements, which include provisions for drought-tolerant plants and water-efficient irrigation systems.
-7. Impact Fees: The City of Garden Grove charges impact fees for ADU projects, which are used to fund infrastructure improvements and other community needs.
-
-It's important to note that these requirements may be subject to change, so it's always a good idea to check with the City of Garden Grove's Planning Department for the most up-to-date information before proceeding with your ADU project."
-
->>> gigi.chat("how do i make a pecan pie?")
-UserWarning: No relevant docs were retrieved using the relevance score threshold 0.5
-  warnings.warn(
-' To make a pecan pie, follow these steps:
-
-1. Preheat your oven to 350°F (175°C).
-2. In a large bowl, whisk together sugar, butter, eggs, and vanilla extract until smooth.
-3. Add corn syrup, salt, and flour to the mixture, mixing well.
-4. Stir in the chopped pecans.
-5. Pour the filling into an unbaked pie crust.
-6. Bake for 1 hour or until a knife inserted in the center comes out clean.
-7. Cool completely before serving.'
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-## TODO
+GPU box (CUDA). Check your CUDA version with `nvidia-smi`, then pick the matching
+wheel (the official selector is at https://pytorch.org/get-started/locally/):
 
-What isn't TODO at this point...
+```bash
+# cu121 / cu124 / cu126 are common; choose the closest <= your driver's CUDA
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
 
-- Cite sources
-- Message history
+Then:
+
+```bash
+pip install -r crawler_requirements.txt
+pip install -r chatbot_requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Optional, to bound CPU threads per request on a shared box:
+
+```bash
+export OMP_NUM_THREADS=8
+```
+
+## 1. Crawl the site
+
+```bash
+python website_crawler.py \
+  --base-url https://your-city-website.com \
+  --db-path ./chroma_db \
+  --collection-name city_website_content
+```
+
+On a GPU box, add `--device cuda` to run embedding on the GPU (much faster for
+large PDFs). Re-running upserts by URL (no wipe); pass `--recreate` to rebuild.
+The crawl prints a summary by file type, year, and potential-PII flag. Document
+type and department are NOT set here; they come from the classifier in step 2.
+
+Performance note: embedding cost scales with chunk count, not page count, and
+large PDFs (budget books, master plans) can be hundreds of chunks each. On CPU
+this dominates runtime. Options: raise `--chunk-size`, lower `--max-file-size-mb`,
+use `--skip-pdf`, or run with `--device cuda`.
+
+## 2. Classify pages for retention (optional, decision-support)
+
+```bash
+python classify.py \
+  --db-path ./chroma_db \
+  --collection-name city_website_content \
+  --model claude-haiku-4-5-20251001
+```
+
+Reads the crawled corpus, classifies each unique page with Haiku into a fixed
+taxonomy (document type, department, record status, confidence, rationale), and
+writes the labels back onto every chunk of that page. Re-runnable: it skips
+pages already labeled unless you pass `--reclassify`. Use `--summary-only` to
+print the current counts without calling the model. Edit the taxonomy lists at
+the top of `classify.py` to match the city's actual retention schedule.
+
+IMPORTANT: these labels are automated suggestions to support a records officer's
+review. They are not an authority for retention or destruction decisions.
+
+## 3. Start the chatbot
+
+```bash
+python city_chatbot.py \
+  --db-path ./chroma_db \
+  --collection-name city_website_content \
+  --model-name claude-sonnet-4-6
+```
+
+Open http://localhost:7860
+
+Gigi introduces herself on the first turn and keeps conversation context: a
+Haiku call rewrites each follow-up into a standalone query for retrieval, and the
+recent turns are passed to Sonnet for the answer (capped by `--max-history`).
+Sources are linked inline in the answer (markdown links), and a Sources list is
+also appended below unless you pass `--no-footer`.
+
+The `--db-path` and `--embedding-model` MUST match what the crawler used, or
+retrieval breaks. Classification is not required for the chatbot to work; the
+chatbot retrieves by vector similarity and ignores the classification labels.
+
+## Crawl scope and stopping
+
+By default the crawler is breadth-first and stays on the start URL's exact host.
+It keeps going until it runs out of in-scope links, so on a large site it will
+try to crawl everything. Bound it with:
+
+- `--max-depth N`: link depth from the start page. `0` = only the start page,
+  `1` = start page plus pages it links to, etc. Unlimited if unset.
+- `--max-pages N`: hard cap on pages crawled (counts successful pages; failed
+  fetches still log but do not count). Unlimited if unset.
+- `--allow-subdomains`: also follow subdomains of the start domain (default:
+  same host only, so `www.city.gov` will not follow `docs.city.gov`).
+- `--skip-pdf`: do not fetch or process PDFs (by extension and content-type).
+- `--skip-spreadsheets`: do not fetch or process spreadsheets (xls, xlsx, xlsm,
+  csv, tsv, ods). Useful because spreadsheets embed poorly and can surface as
+  noisy citations.
+- `--exclude-pattern REGEX` (repeatable): skip URLs matching the regex. Use this
+  to keep auto-generated/templated pages out of the index, e.g. paginated record
+  lists and query-string traps:
+  `--exclude-pattern 'annual_permits' --exclude-pattern '\?year='`
+- `--include-pattern REGEX` (repeatable): only crawl URLs matching at least one
+  regex. Use to restrict a crawl to a section of the site.
+- `--sitemap URL`: seed the crawl from a sitemap instead of just the start page.
+  Handles a sitemap index and gzipped sub-sitemaps. The listed URLs become the
+  depth-0 set, so the crawl covers what the CMS considers canonical content.
+  Combine with `--max-depth 1` for a hybrid: sitemap pages plus one hop of the
+  pages they link to. All filters (exclude patterns, robots, skip-pdf, etc.)
+  still apply to both the seeds and the branched links.
+
+A Drupal sitemap lists Drupal-managed content, so seeding from it tends to
+exclude bolted-on non-Drupal apps (paginated record viewers, etc.) by
+construction. Note it may also omit some legitimate pages or files that are
+configured out of the sitemap.
+
+Curation matters more than coverage. Indexing auto-generated list/search/
+calendar pages pollutes retrieval: their boilerplate shares keywords with real
+questions and crowds out the pages that actually answer them. Exclude them.
+
+It restricts to the start URL's domain automatically; off-site links are
+skipped, and robots.txt is fetched and enforced.
+
+## Key options
+
+Crawler: `--embedding-model`, `--device`, `--chunk-size`, `--chunk-overlap`,
+`--max-concurrent`, `--recreate`, `--max-depth`, `--max-pages`,
+`--allow-subdomains`, `--skip-pdf`, `--skip-spreadsheets`, `--exclude-pattern`, `--include-pattern`, `--sitemap`
+
+Classifier: `--model`, `--concurrency`, `--reclassify`, `--summary-only`
+
+Chatbot: `--model-name`, `--rewrite-model`, `--max-history`, `--no-footer`, `--top-k`, `--min-score`, `--temperature`, `--max-tokens`, `--share`
+
+`--min-score` is genuine cosine similarity in [0, 1] (1 = identical). Start
+around 0.3 and tune.
+
+`--temperature` defaults to 0.0 (most deterministic). Temperature is a weak
+hallucination control: the real levers are retrieval quality (`--min-score`,
+`--top-k`) and the grounding instructions in the system prompt.
+
+## Inspect and test retrieval
+
+```bash
+python query_test.py --list                                  # every crawled page
+python query_test.py --query "how do I pay my water bill"    # ranked results + similarity
+python classify.py --summary-only                            # current label counts
+```
+
+`--list` and `--summary-only` do not load the embedding model or call the API.
+Use `query_test.py` similarity numbers to choose a `--min-score` for the chatbot.
+
+## Notes and limitations
+
+- Concurrency: a single Gradio process is bound by the Python GIL for the
+  CPU-bound query embedding. Fine for staff or a pilot. For many simultaneous
+  residents, run multiple worker processes or split the embedder into its own
+  service.
+- Language: BGE-large-en is English-tuned. Swap `--embedding-model` for a
+  multilingual model if resident content is not primarily English.
+- Aggregations: summaries are computed in Python over Chroma metadata. Fine at
+  city scale; for very large corpora consider pgvector.
+- Fragment URLs: the crawler currently treats `page#section` as distinct from
+  `page`, which can cause duplicate fetches. Known minor issue.
+- Tested with chromadb 1.5.x, gradio 6.x, anthropic 0.109.x. Lock the ranges in
+  the requirements files to what installs cleanly on your machine.
+- Data flow: crawled content and the crawler's PII flags stay local. The final
+  prompt plus retrieved context goes to the Anthropic API (chatbot), and page
+  text goes to the Anthropic API during classification (`classify.py`). 
