@@ -2,21 +2,28 @@ name: Sync to Hugging Face Space
 
 on:
   push:
-    branches: [main, v2]
+    branches: [v2]
   workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # full history; HF Spaces wants real commits
 
-      - name: Push to Space
+      - name: Push clean snapshot to Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           # The Space git URL. Change to your actual Space id if different.
           SPACE_URL: huggingface.co/spaces/ggcity/gigi
         run: |
-          git push --force "https://hf:${HF_TOKEN}@${SPACE_URL}" HEAD:main
+          git config user.email "ci@ggcity.local"
+          git config user.name "gigi-ci"
+          # Build a single commit from the CURRENT tree only (no history),
+          # so large files in past commits are never pushed to the Space.
+          git checkout --orphan _deploy
+          git add -A
+          git commit -m "Deploy ${GITHUB_SHA::7}"
+          git push --force "https://hf:${HF_TOKEN}@${SPACE_URL}" _deploy:main

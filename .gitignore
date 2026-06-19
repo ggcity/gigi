@@ -3,7 +3,7 @@
 *.env
 
 # Crawled data and vector store (may contain site content + PII flags)
-chroma_db/
+chroma_db*/
 *.sqlite3
 
 # Logs
