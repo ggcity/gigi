@@ -21,6 +21,7 @@ Set your key first:  export ANTHROPIC_API_KEY=sk-ant-...
 """
 
 import argparse
+import datetime
 import logging
 import os
 from typing import Dict, List, Tuple, Generator
@@ -47,17 +48,24 @@ SYSTEM_TEMPLATE = (
     "warm, welcoming, approachable tone.\n\n"
     "RULES:\n"
     "1. Use ONLY the retrieved context below to answer.\n"
-    "1.1.  Don't sound condescending saying things like you understand the user's feelings, when you cant.\n"
-    "1.2. Make sure you're info is not out of date before answering. Today is June 18, 2026\n"
-    "1.3. Don't offer links to website outside our domain: ggcity.org\n"
-    "2. If you are unsure or the answer is not in the context, say you don't know "
+    "2. Do not sound condescending, e.g. do not claim to understand the user's "
+    "feelings when you cannot.\n"
+    "3. Make sure your information is not out of date before answering. "
+    "Today is {today}.\n"
+    "4. Do not offer links to websites outside our domain: ggcity.org\n"
+    "5. If you are unsure or the answer is not in the context, say you don't know "
     "and point the resident to where on the city website they might look.\n"
-    "3. If the question is not about the City of Garden Grove, politely decline.\n"
-    "4. Keep answers concise, but complete.\n"
-    "5. Do not ask follow-up questions.\n"
-    "6. When you reference a page, link to it inline using markdown link syntax: "
-    "[page title](url), taking the exact URL from the source list below. Link the "
-    "first mention of each relevant page. Never paste a bare URL on its own.\n\n"
+    "6. If the question is not about the City of Garden Grove, politely decline.\n"
+    "7. Keep answers concise, but complete.\n"
+    "8. Do not ask follow-up questions.\n"
+    "9. Every context block below is tagged with a source id like [S0]. When you "
+    "state a fact, link the page it actually came from, using markdown link "
+    "syntax [page title](url) with the title and URL of the SAME source id whose "
+    "content supports that fact. Do not attribute a fact to a page unless that "
+    "page's own context block contains it. If a fact is supported by one source "
+    "id but you are tempted to cite a different one, cite the correct source id or "
+    "do not link at all. Link the first mention of each relevant page. Never paste "
+    "a bare URL on its own.\n\n"
     "Retrieved context from the city website:\n{context}\n\n"
     "Source pages (title -> url) you may link to:{sources_text}"
 )
@@ -185,24 +193,33 @@ class CityRAGChatbot:
     def format_context_and_sources(self, search_results: List[Dict]) -> Tuple[str, List[Dict]]:
         if not search_results:
             return "", []
+        # One source_id per unique URL, so every chunk from the same page shares
+        # an id and the model cites the page, not the chunk. The id is what ties
+        # a claim in the context back to a specific URL at generation time.
         sources_by_url: Dict[str, Dict] = {}
+        order: List[str] = []  # first-seen order, for stable S0, S1, ...
         context_parts = []
         for result in search_results:
             url = urldefrag(result.get("url", "")).url  # drop #fragment for dedup
             title = result.get("title", "")
             content = result.get("content", "")
-            context_parts.append(f"Title: {title}\nContent: {content}")
             if url not in sources_by_url:
                 sources_by_url[url] = {
+                    "source_id": f"S{len(order)}",
                     "title": title,
                     "url": url,
                     "file_type": result.get("file_type", ""),
                     "score": result.get("score", 0.0),
                 }
+                order.append(url)
             elif result.get("score", 0.0) > sources_by_url[url]["score"]:
                 sources_by_url[url]["score"] = result["score"]
+            sid = sources_by_url[url]["source_id"]
+            context_parts.append(
+                f"[{sid}] Title: {title}\nURL: {url}\nContent: {content}"
+            )
         context = "\n\n---\n\n".join(context_parts)
-        sources = list(sources_by_url.values())
+        sources = [sources_by_url[u] for u in order]
         return context, sources
 
     @staticmethod
@@ -224,8 +241,13 @@ class CityRAGChatbot:
                           history: List[Dict]) -> Generator[str, None, None]:
         sources_text = ""
         if sources:
-            sources_text = "\n" + "\n".join(f"- {s['title']} -> {s['url']}" for s in sources)
-        system_prompt = SYSTEM_TEMPLATE.format(context=context, sources_text=sources_text)
+            sources_text = "\n" + "\n".join(
+                f"- [{s['source_id']}] {s['title']} -> {s['url']}" for s in sources
+            )
+        today = datetime.date.today().strftime("%B %-d, %Y")
+        system_prompt = SYSTEM_TEMPLATE.format(
+            context=context, sources_text=sources_text, today=today
+        )
 
         messages = list(history) + [{"role": "user", "content": query}]
         try:
@@ -361,3 +383,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
