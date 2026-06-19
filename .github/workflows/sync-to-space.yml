@@ -1,0 +1,22 @@
+name: Sync to Hugging Face Space
+
+on:
+  push:
+    branches: [main, v2]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history; HF Spaces wants real commits
+
+      - name: Push to Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # The Space git URL. Change to your actual Space id if different.
+          SPACE_URL: huggingface.co/spaces/ggcity/gigi
+        run: |
+          git push --force "https://hf:${HF_TOKEN}@${SPACE_URL}" HEAD:main
