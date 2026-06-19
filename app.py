@@ -42,6 +42,7 @@ def build():
         min_score=float(os.environ.get("MIN_SCORE", "0.3")),
         max_history_messages=int(os.environ.get("MAX_HISTORY", "6")),
         show_footer=os.environ.get("SHOW_FOOTER", "1") != "0",
+        temperature=float(os.environ.get("TEMPERATURE", "0.0")),
     )
     return bot.create_gradio_interface()
 
