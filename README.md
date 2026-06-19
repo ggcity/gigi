@@ -1,3 +1,15 @@
+---
+title: Gigi City Assistant
+emoji: 🏛️
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: "6.19.0"
+app_file: app.py
+pinned: false
+---
+
+
 # City Website RAG Chatbot (Local Edition)
 
 A RAG chatbot that helps residents navigate city services. This edition runs
