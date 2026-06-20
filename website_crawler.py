@@ -22,7 +22,6 @@ import hashlib
 import logging
 import os
 import re
-import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,11 +31,10 @@ from urllib.robotparser import RobotFileParser
 
 import aiohttp
 import chromadb
-import PyPDF2
 from bs4 import BeautifulSoup
-from docx import Document
 
-from rag_embeddings import Embedder, sanitize_metadata, fetch_all
+from shared.rag_embeddings import Embedder, sanitize_metadata, fetch_all
+from shared import extraction
 
 logging.basicConfig(
     level=logging.INFO,
@@ -197,34 +195,7 @@ class WebsiteCrawler:
             await self.session_http.close()
 
     def chunk_text(self, text: str, title: str = "") -> List[str]:
-        if len(text) <= self.chunk_size:
-            return [text]
-
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = start + self.chunk_size
-            if end < len(text):
-                last_period = text.rfind(".", start, end)
-                last_question = text.rfind("?", start, end)
-                last_exclamation = text.rfind("!", start, end)
-                sentence_end = max(last_period, last_question, last_exclamation)
-                if sentence_end > start + self.chunk_size // 2:
-                    end = sentence_end + 1
-                else:
-                    last_space = text.rfind(" ", start, end)
-                    if last_space > start + self.chunk_size // 2:
-                        end = last_space
-
-            chunk = text[start:end].strip()
-            if chunk:
-                if title and not chunk.startswith(title):
-                    chunk = f"Title: {title}\n\n{chunk}"
-                chunks.append(chunk)
-
-            new_start = end - self.chunk_overlap
-            start = new_start if new_start > start else end
-        return chunks
+        return extraction.chunk_text(text, title, self.chunk_size, self.chunk_overlap)
 
     async def fetch_sitemap_urls(self, sitemap_url: str, _depth: int = 0,
                                  _seen: Optional[Set[str]] = None) -> Set[str]:
@@ -329,98 +300,29 @@ class WebsiteCrawler:
         return 0
 
     async def extract_text_from_html(self, content: str, url: str) -> Tuple[str, str, List[str], Dict]:
+        # Text/title/metadata come from the shared extractor so the normalization
+        # matches what the backend reads at verify time (V3.md 2.5). Link
+        # discovery stays here because it needs crawler URL-validity state; it
+        # runs over a soup decomposed the same way, so nav/footer links are
+        # excluded identically to before.
+        text, title, metadata = extraction.extract_text_from_html(content, url)
+
         soup = BeautifulSoup(content, "html.parser")
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
-
-        title_tag = soup.find("title")
-        title = title_tag.get_text().strip() if title_tag else urlparse(url).path
-
-        main_content = (soup.find("main") or soup.find("article")
-                        or soup.find("div", class_="content") or soup.body or soup)
-        text = main_content.get_text(separator=" ", strip=True)
-        text = re.sub(r"\s+", " ", text).strip()
-
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
         links = []
         for link in soup.find_all("a", href=True):
             absolute_url = urldefrag(urljoin(url, link["href"])).url
             if self.is_valid_url(absolute_url):
                 links.append(absolute_url)
 
-        metadata = {
-            "has_tables": len(soup.find_all("table")) > 0,
-            "has_images": len(soup.find_all("img")) > 0,
-        }
-        for meta_tag in soup.find_all("meta"):
-            if meta_tag.get("property") == "article:published_time":
-                metadata["published_date_raw"] = meta_tag.get("content")
-            elif meta_tag.get("property") == "article:modified_time":
-                metadata["modified_date_raw"] = meta_tag.get("content")
-            elif meta_tag.get("name") == "date":
-                metadata["published_date_raw"] = meta_tag.get("content")
-
         return text, title, links, metadata
 
     async def extract_text_from_pdf(self, content: bytes) -> Tuple[str, str, Dict]:
-        metadata: Dict = {}
-        try:
-            with tempfile.NamedTemporaryFile() as tmp_file:
-                tmp_file.write(content)
-                tmp_file.flush()
-                with open(tmp_file.name, "rb") as pdf_file:
-                    pdf_reader = PyPDF2.PdfReader(pdf_file)
-                    text = ""
-                    title = ""
-                    if pdf_reader.metadata:
-                        title = pdf_reader.metadata.title or ""
-                        metadata["author"] = pdf_reader.metadata.author
-                        metadata["creator"] = pdf_reader.metadata.creator
-                        metadata["producer"] = pdf_reader.metadata.producer
-                        metadata["subject"] = pdf_reader.metadata.subject
-                        if getattr(pdf_reader.metadata, "creation_date", None):
-                            metadata["created_date_raw"] = pdf_reader.metadata.creation_date.isoformat()
-                        if getattr(pdf_reader.metadata, "modification_date", None):
-                            metadata["modified_date_raw"] = pdf_reader.metadata.modification_date.isoformat()
-                    metadata["page_count"] = len(pdf_reader.pages)
-                    for page in pdf_reader.pages:
-                        text += (page.extract_text() or "") + "\n"
-                    return text.strip(), title, metadata
-        except Exception as e:
-            logger.error(f"Error extracting PDF text: {e}")
-            return "", "", metadata
+        return extraction.extract_text_from_pdf(content)
 
     async def extract_text_from_docx(self, content: bytes) -> Tuple[str, str, Dict]:
-        metadata: Dict = {}
-        try:
-            with tempfile.NamedTemporaryFile() as tmp_file:
-                tmp_file.write(content)
-                tmp_file.flush()
-                doc = Document(tmp_file.name)
-                title = ""
-                if doc.core_properties.title:
-                    title = doc.core_properties.title
-                elif doc.paragraphs:
-                    title = doc.paragraphs[0].text[:100]
-
-                metadata["author"] = doc.core_properties.author
-                metadata["creator"] = doc.core_properties.author
-                metadata["subject"] = doc.core_properties.subject
-                metadata["keywords"] = (
-                    doc.core_properties.keywords.split(",") if doc.core_properties.keywords else []
-                )
-                if doc.core_properties.created:
-                    metadata["created_date_raw"] = doc.core_properties.created.isoformat()
-                if doc.core_properties.modified:
-                    metadata["modified_date_raw"] = doc.core_properties.modified.isoformat()
-
-                text = ""
-                for paragraph in doc.paragraphs:
-                    text += paragraph.text + "\n"
-                metadata["has_tables"] = len(doc.tables) > 0
-                return text.strip(), title, metadata
-        except Exception as e:
-            logger.error(f"Error extracting DOCX text: {e}")
-            return "", "", metadata
+        return extraction.extract_text_from_docx(content)
 
     async def process_url(self, url: str, semaphore: asyncio.Semaphore) -> List[str]:
         async with semaphore:

@@ -24,7 +24,7 @@ from typing import Dict, List
 import chromadb
 from anthropic import Anthropic
 
-from rag_embeddings import sanitize_metadata, fetch_all
+from shared.rag_embeddings import sanitize_metadata, fetch_all
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

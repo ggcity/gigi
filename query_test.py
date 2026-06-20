@@ -17,7 +17,7 @@ import textwrap
 
 import chromadb
 
-from rag_embeddings import Embedder, fetch_all
+from shared.rag_embeddings import Embedder, fetch_all
 
 
 def run_query(collection, embedder, query: str, top_k: int):

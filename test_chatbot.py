@@ -1,7 +1,7 @@
 import sys, math, re, tempfile, os, datetime, types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# city_chatbot imports gradio and anthropic at module top. The test fakes the
+# gradio_app imports gradio and anthropic at module top. The test fakes the
 # Anthropic client and doesn't exercise a real Gradio launch, so stub both
 # modules to avoid installing the full stack just to import the file.
 if "gradio" not in sys.modules:
@@ -44,7 +44,7 @@ class _Messages:
 class FakeClient:
     def __init__(self): self.messages=_Messages()
 
-import chromadb, city_chatbot
+import chromadb, gradio_app
 
 results=[]
 def check(n,c): results.append((n,bool(c))); print(("PASS " if c else "FAIL ")+n)
@@ -62,7 +62,7 @@ metas=[{"title":"Collection FAQ","url":"http://x/faqs#single","file_type":"html"
        {"title":"Organics Recycling","url":"http://x/organics","file_type":"html"}]
 coll.upsert(ids=["1","2","3"], embeddings=emb.embed_documents(docs), documents=docs, metadatas=metas)
 
-class TestBot(city_chatbot.CityRAGChatbot):
+class TestBot(gradio_app.CityRAGChatbot):
     def __init__(self, db_path):
         self.model_name="sonnet"; self.rewrite_model="haiku"
         self.max_tokens=200; self.temperature=0.0; self.top_k_results=5

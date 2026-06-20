@@ -21,7 +21,6 @@ Set your key first:  export ANTHROPIC_API_KEY=sk-ant-...
 """
 
 import argparse
-import datetime
 import logging
 import os
 from typing import Dict, List, Tuple, Generator
@@ -31,7 +30,8 @@ import chromadb
 import gradio as gr
 from anthropic import Anthropic
 
-from rag_embeddings import Embedder
+from shared.rag_embeddings import Embedder
+from shared import rag_core
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,105 +122,20 @@ class CityRAGChatbot:
         )
         logger.info(f"Connected to Anthropic ({self.model_name})")
 
-    # ---- history handling --------------------------------------------------
+    # ---- history / rewrite / retrieval (delegated to shared.rag_core) -------
     def _normalize_history(self, history) -> List[Dict]:
-        """Accept Gradio 'messages' (list of dicts) or old tuple format; return a
-        capped list of {role, content} dicts."""
-        msgs: List[Dict] = []
-        if not history:
-            return msgs
-        for item in history:
-            if isinstance(item, dict) and item.get("role") in ("user", "assistant"):
-                if item.get("content"):
-                    msgs.append({"role": item["role"], "content": str(item["content"])})
-            elif isinstance(item, (list, tuple)) and len(item) == 2:
-                user_msg, bot_msg = item
-                if user_msg:
-                    msgs.append({"role": "user", "content": str(user_msg)})
-                if bot_msg:
-                    msgs.append({"role": "assistant", "content": str(bot_msg)})
-        return msgs[-self.max_history_messages:]
+        return rag_core.normalize_history(history, self.max_history_messages)
 
     def rewrite_query(self, message: str, history: List[Dict]) -> str:
-        """Condense conversation + latest message into a standalone search query."""
-        convo = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-        system = (
-            "Rewrite the user's latest message into a single standalone search query "
-            "for a City of Garden Grove website search, resolving any references to "
-            "earlier turns (pronouns, 'that', 'it', omitted subjects). Output ONLY "
-            "the query text, no quotes, no preamble."
-        )
-        user = f"Conversation so far:\n{convo}\n\nLatest message: {message}\n\nStandalone query:"
-        try:
-            resp = self.client.messages.create(
-                model=self.rewrite_model,
-                max_tokens=80,
-                temperature=0,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
-            q = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-            return q or message
-        except Exception as e:
-            logger.warning(f"Query rewrite failed, using raw message: {e}")
-            return message
+        return rag_core.rewrite_query(self.client, self.rewrite_model, message, history)
 
-    # ---- retrieval ---------------------------------------------------------
     def search_knowledge_base(self, query: str) -> List[Dict]:
-        try:
-            query_embedding = self.embedder.embed_query(query)
-            response = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=self.top_k_results,
-                include=["documents", "metadatas", "distances"],
-            )
-            results = []
-            documents = response.get("documents", [[]])[0]
-            metadatas = response.get("metadatas", [[]])[0]
-            distances = response.get("distances", [[]])[0]
-            for content, metadata, distance in zip(documents, metadatas, distances):
-                similarity = 1.0 - distance  # Chroma cosine distance -> similarity
-                if similarity >= self.min_score:
-                    item = dict(metadata or {})
-                    item["content"] = content
-                    item["score"] = similarity
-                    results.append(item)
-            return results
-        except Exception as e:
-            logger.error(f"Error searching knowledge base: {e}")
-            return []
+        return rag_core.search_knowledge_base(
+            self.embedder, self.collection, query, self.top_k_results, self.min_score
+        )
 
     def format_context_and_sources(self, search_results: List[Dict]) -> Tuple[str, List[Dict]]:
-        if not search_results:
-            return "", []
-        # One source_id per unique URL, so every chunk from the same page shares
-        # an id and the model cites the page, not the chunk. The id is what ties
-        # a claim in the context back to a specific URL at generation time.
-        sources_by_url: Dict[str, Dict] = {}
-        order: List[str] = []  # first-seen order, for stable S0, S1, ...
-        context_parts = []
-        for result in search_results:
-            url = urldefrag(result.get("url", "")).url  # drop #fragment for dedup
-            title = result.get("title", "")
-            content = result.get("content", "")
-            if url not in sources_by_url:
-                sources_by_url[url] = {
-                    "source_id": f"S{len(order)}",
-                    "title": title,
-                    "url": url,
-                    "file_type": result.get("file_type", ""),
-                    "score": result.get("score", 0.0),
-                }
-                order.append(url)
-            elif result.get("score", 0.0) > sources_by_url[url]["score"]:
-                sources_by_url[url]["score"] = result["score"]
-            sid = sources_by_url[url]["source_id"]
-            context_parts.append(
-                f"[{sid}] Title: {title}\nURL: {url}\nContent: {content}"
-            )
-        context = "\n\n---\n\n".join(context_parts)
-        sources = [sources_by_url[u] for u in order]
-        return context, sources
+        return rag_core.format_context_and_sources(search_results)
 
     @staticmethod
     def _sources_footer(sources: List[Dict]) -> str:
@@ -244,7 +159,7 @@ class CityRAGChatbot:
             sources_text = "\n" + "\n".join(
                 f"- [{s['source_id']}] {s['title']} -> {s['url']}" for s in sources
             )
-        today = datetime.date.today().strftime("%B %-d, %Y")
+        today = rag_core.today_str()
         system_prompt = SYSTEM_TEMPLATE.format(
             context=context, sources_text=sources_text, today=today
         )

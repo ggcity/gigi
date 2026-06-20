@@ -46,7 +46,6 @@ import logging
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -54,7 +53,14 @@ from urllib.parse import urldefrag, urlparse
 
 import chromadb
 
-from rag_embeddings import Embedder, sanitize_metadata
+from shared.rag_embeddings import Embedder, sanitize_metadata
+from shared.extraction import (
+    extract_text_from_pdf,
+    extract_text_from_docx,
+    extract_text_from_html,
+    extract_text_from_plain,
+    chunk_text,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -72,137 +78,15 @@ PII_PATTERNS = {
 
 
 # --------------------------------------------------------------------------
-# Extraction. Standalone copies of the crawler's logic (the crawler's are
-# instance methods tangled with crawler state). Behavior matches the crawler.
+# Extraction and chunking now live in shared/extraction.py (imported above),
+# so add_resource, the crawler, and the V3 backend share one implementation
+# and cannot drift on normalization or chunk boundaries.
+#
+# NOTE: shared.chunk_text uses the crawler's canonical single-chunk behavior
+# (a short document returns one unprefixed chunk), which is the source of truth
+# for what is actually indexed. The previous local copy added a Title: prefix to
+# single chunks; that minor drift is intentionally dropped here.
 # --------------------------------------------------------------------------
-def extract_text_from_pdf(content: bytes) -> Tuple[str, str, Dict]:
-    import PyPDF2
-    metadata: Dict = {}
-    try:
-        with tempfile.NamedTemporaryFile() as tmp:
-            tmp.write(content)
-            tmp.flush()
-            with open(tmp.name, "rb") as fh:
-                reader = PyPDF2.PdfReader(fh)
-                text = ""
-                title = ""
-                if reader.metadata:
-                    title = reader.metadata.title or ""
-                    metadata["author"] = reader.metadata.author
-                    metadata["creator"] = reader.metadata.creator
-                    metadata["producer"] = reader.metadata.producer
-                    metadata["subject"] = reader.metadata.subject
-                    if getattr(reader.metadata, "creation_date", None):
-                        metadata["created_date_raw"] = reader.metadata.creation_date.isoformat()
-                    if getattr(reader.metadata, "modification_date", None):
-                        metadata["modified_date_raw"] = reader.metadata.modification_date.isoformat()
-                metadata["page_count"] = len(reader.pages)
-                for page in reader.pages:
-                    text += (page.extract_text() or "") + "\n"
-                return text.strip(), title, metadata
-    except Exception as e:
-        logger.error(f"Error extracting PDF text: {e}")
-        return "", "", metadata
-
-
-def extract_text_from_docx(content: bytes) -> Tuple[str, str, Dict]:
-    from docx import Document
-    metadata: Dict = {}
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".docx") as tmp:
-            tmp.write(content)
-            tmp.flush()
-            doc = Document(tmp.name)
-            title = ""
-            if doc.core_properties.title:
-                title = doc.core_properties.title
-            elif doc.paragraphs:
-                title = doc.paragraphs[0].text[:100]
-            metadata["author"] = doc.core_properties.author
-            metadata["creator"] = doc.core_properties.author
-            metadata["subject"] = doc.core_properties.subject
-            metadata["keywords"] = (
-                doc.core_properties.keywords.split(",") if doc.core_properties.keywords else []
-            )
-            if doc.core_properties.created:
-                metadata["created_date_raw"] = doc.core_properties.created.isoformat()
-            if doc.core_properties.modified:
-                metadata["modified_date_raw"] = doc.core_properties.modified.isoformat()
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            metadata["has_tables"] = len(doc.tables) > 0
-            return text.strip(), title, metadata
-    except Exception as e:
-        logger.error(f"Error extracting DOCX text: {e}")
-        return "", "", metadata
-
-
-def extract_text_from_html(content: str, url: str = "") -> Tuple[str, str, Dict]:
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(content, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header"]):
-        tag.decompose()
-    title_tag = soup.find("title")
-    title = title_tag.get_text().strip() if title_tag else (urlparse(url).path if url else "")
-    main = (soup.find("main") or soup.find("article")
-            or soup.find("div", class_="content") or soup.body or soup)
-    text = main.get_text(separator=" ", strip=True)
-    text = re.sub(r"\s+", " ", text).strip()
-    metadata = {
-        "has_tables": len(soup.find_all("table")) > 0,
-        "has_images": len(soup.find_all("img")) > 0,
-    }
-    for meta_tag in soup.find_all("meta"):
-        if meta_tag.get("property") == "article:published_time":
-            metadata["published_date_raw"] = meta_tag.get("content")
-        elif meta_tag.get("property") == "article:modified_time":
-            metadata["modified_date_raw"] = meta_tag.get("content")
-        elif meta_tag.get("name") == "date":
-            metadata["published_date_raw"] = meta_tag.get("content")
-    return text, title, metadata
-
-
-def extract_text_from_plain(content: bytes) -> Tuple[str, str, Dict]:
-    """TXT / MD. No real metadata; title is left to caller / first line."""
-    text = content.decode("utf-8", "ignore").strip()
-    return text, "", {}
-
-
-# --------------------------------------------------------------------------
-# Chunking. Copied VERBATIM from website_crawler.WebsiteCrawler.chunk_text so
-# chunk boundaries match crawled content exactly.
-# --------------------------------------------------------------------------
-def chunk_text(text: str, title: str, chunk_size: int, chunk_overlap: int) -> List[str]:
-    if len(text) <= chunk_size:
-        single = text.strip()
-        if single and title and not single.startswith(title):
-            single = f"Title: {title}\n\n{single}"
-        return [single] if single else []
-
-    chunks: List[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end < len(text):
-            last_period = text.rfind(".", start, end)
-            last_question = text.rfind("?", start, end)
-            last_exclamation = text.rfind("!", start, end)
-            sentence_end = max(last_period, last_question, last_exclamation)
-            if sentence_end > start + chunk_size // 2:
-                end = sentence_end + 1
-            else:
-                last_space = text.rfind(" ", start, end)
-                if last_space > start + chunk_size // 2:
-                    end = last_space
-        chunk = text[start:end].strip()
-        if chunk:
-            if title and not chunk.startswith(title):
-                chunk = f"Title: {title}\n\n{chunk}"
-            chunks.append(chunk)
-        new_start = end - chunk_overlap
-        start = new_start if new_start > start else end
-    return chunks
 
 
 # --------------------------------------------------------------------------

@@ -9,7 +9,7 @@ Space "Variables" and ANTHROPIC_API_KEY as a Space "Secret").
 
 import os
 
-from city_chatbot import CityRAGChatbot
+from gradio_app import CityRAGChatbot
 
 
 def ensure_chroma(db_path: str):
