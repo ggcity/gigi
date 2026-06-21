@@ -46,27 +46,40 @@ def normalize_history(history, cap: int) -> List[Dict]:
     return msgs[-cap:]
 
 
+# Single source of truth for the follow-up rewrite prompt. The sync v2 path
+# (rewrite_query below, used by the Gradio harness) and the V3 backend's async
+# rewrite (backend/rewrite.py, which holds an AsyncAnthropic client and so can't
+# call rewrite_query directly) both build the prompt from these, so the wording
+# can't drift between indexing-time and serving-time consumers.
+REWRITE_SYSTEM = (
+    "Rewrite the user's latest message into a single standalone search query "
+    "for a City of Garden Grove website search, resolving any references to "
+    "earlier turns (pronouns, 'that', 'it', omitted subjects). Output ONLY "
+    "the query text, no quotes, no preamble."
+)
+
+
+def rewrite_user_prompt(message: str, history: List[Dict]) -> str:
+    """Build the user-turn text for the rewrite call: prior conversation plus the
+    latest message. Language-agnostic — references are resolved by the model, not
+    by any word list."""
+    convo = "\n".join(f"{m['role']}: {m['content']}" for m in history)
+    return f"Conversation so far:\n{convo}\n\nLatest message: {message}\n\nStandalone query:"
+
+
 def rewrite_query(client, model: str, message: str, history: List[Dict]) -> str:
     """Condense conversation + latest message into a standalone search query.
 
     Resolves pronouns / omitted subjects against recent turns so follow-ups
     retrieve the right context. Falls back to the raw message on any error.
     """
-    convo = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-    system = (
-        "Rewrite the user's latest message into a single standalone search query "
-        "for a City of Garden Grove website search, resolving any references to "
-        "earlier turns (pronouns, 'that', 'it', omitted subjects). Output ONLY "
-        "the query text, no quotes, no preamble."
-    )
-    user = f"Conversation so far:\n{convo}\n\nLatest message: {message}\n\nStandalone query:"
     try:
         resp = client.messages.create(
             model=model,
             max_tokens=80,
             temperature=0,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+            system=REWRITE_SYSTEM,
+            messages=[{"role": "user", "content": rewrite_user_prompt(message, history)}],
         )
         q = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
         return q or message

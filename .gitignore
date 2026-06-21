@@ -6,6 +6,11 @@
 chroma_db*/
 *.sqlite3
 
+# V3 backend SQLite store — PII (interactions.user_query) under AR 2.16; never commit
+gigi.db
+gigi.db-shm
+gigi.db-wal
+
 # Logs
 crawler.log
 *.log

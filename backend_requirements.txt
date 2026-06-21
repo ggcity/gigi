@@ -1,0 +1,26 @@
+# Gigi V3 backend dependencies.
+#
+# Install torch FIRST, matched to hardware (see CLAUDE.md), then this file.
+# SQLite is stdlib (no aiosqlite); the WebSocket server ships with
+# uvicorn[standard]. Lock exact versions into a freeze file once they install
+# cleanly.
+
+# --- web / transport ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27              # async live page fetch
+
+# --- models / retrieval (shared with the crawler + Gradio harness) ---
+anthropic>=0.39
+chromadb>=0.5
+sentence-transformers>=3.0
+
+# --- shared/extraction parsers ---
+beautifulsoup4>=4.12
+lxml>=5.0
+PyPDF2>=3.0
+python-docx>=1.1
+
+# --- tests ---
+pytest>=8.0
+pytest-asyncio>=0.23
