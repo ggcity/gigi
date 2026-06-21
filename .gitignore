@@ -23,3 +23,11 @@ venv/
 
 # Model / HF cache (usually in ~/.cache, but just in case)
 .cache/
+
+# Frontend (chat-module / future Lit shell + companion) — JS build/test artifacts
+node_modules/
+chat-module/dist/
+chat-module/test-results/
+chat-module/playwright-report/
+chat-module/.vite/
+coverage/

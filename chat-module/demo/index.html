@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gigi-chat — demo harness</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      /* Demo chrome theming — follows the OS by default, overridable by the toggle. */
+      body {
+        --bg: #fafafa;
+        --fg: #1a1a1a;
+        --panel: #ffffff;
+        --border: #cccccc;
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      @media (prefers-color-scheme: dark) {
+        body:not([data-demo='light']):not([data-demo='ocean']) {
+          --bg: #0f1115;
+          --fg: #e8eaed;
+          --panel: #181b21;
+          --border: #333a44;
+          color-scheme: dark;
+        }
+      }
+      body[data-demo='dark'] {
+        --bg: #0f1115;
+        --fg: #e8eaed;
+        --panel: #181b21;
+        --border: #333a44;
+        color-scheme: dark;
+      }
+      body[data-demo='ocean'] {
+        --bg: #04181d;
+        --fg: #d7f0ee;
+        --panel: #072a30;
+        --border: #16454b;
+        color-scheme: dark;
+      }
+
+      /*
+        Sample entrance/streaming animation, scoped to the Ocean theme, applied
+        from OUTSIDE the component via its exported ::part()s — exactly how the
+        Phase 3 shell will brand motion without forking the module. All of it is
+        gated by prefers-reduced-motion (the module never animates on its own).
+
+          ::part(message)           every message bubble (fires once per bubble)
+          ::part(message streaming) only the actively-streaming bubble
+          ::part(caret)             the streaming cursor (token affordance)
+      */
+      @media (prefers-reduced-motion: no-preference) {
+        /* Bubble: slide up + fade in, once, when the bubble is created. */
+        body[data-demo='ocean'] gigi-chat::part(message) {
+          animation: ocean-bubble-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+        /* Tokens arriving: a soft breathing glow on the live bubble while it
+           streams; stops automatically when the 'streaming' part is removed. */
+        body[data-demo='ocean'] gigi-chat::part(message streaming) {
+          animation: ocean-stream-glow 1.6s ease-in-out infinite;
+        }
+        /* Token cursor: a glowing pulse (the component's own blink keeps the
+           visibility cadence; we only add the ocean glow + shape). */
+        body[data-demo='ocean'] gigi-chat::part(caret) {
+          border-radius: 2px;
+          box-shadow: 0 0 8px 1px #5ce0d0;
+        }
+      }
+      @keyframes ocean-bubble-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px) scale(0.985);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @keyframes ocean-stream-glow {
+        0%,
+        100% {
+          box-shadow: 0 0 0 1px rgba(92, 224, 208, 0);
+        }
+        50% {
+          box-shadow: 0 0 12px 1px rgba(92, 224, 208, 0.28);
+        }
+      }
+
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(320px, 1fr) 360px;
+        gap: 16px;
+        padding: 16px;
+        align-items: start;
+      }
+      @media (max-width: 760px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      .chat-frame {
+        height: 70vh;
+        min-height: 420px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+      gigi-chat {
+        height: 100%;
+      }
+      .events {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        height: 70vh;
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+      }
+      .events h2 {
+        margin: 0;
+        padding: 10px 12px;
+        font-size: 0.9rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .events ol {
+        margin: 0;
+        padding: 8px 12px;
+        overflow-y: auto;
+        font: 12px/1.4 ui-monospace, monospace;
+      }
+      .events li {
+        margin-bottom: 4px;
+        word-break: break-all;
+      }
+      label {
+        font-size: 0.9rem;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 6px 10px;
+        color: var(--fg);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body data-demo="system">
+    <header>
+      <strong>gigi-chat demo</strong>
+      <label>
+        Theme:
+        <select id="theme">
+          <option value="system">System (follow OS)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="ocean">Ocean (custom)</option>
+        </select>
+      </label>
+      <label>
+        Narration:
+        <select id="narration-pos">
+          <option value="top">Top</option>
+          <option value="bottom">Bottom</option>
+        </select>
+      </label>
+      <label> <input type="checkbox" id="avatars" /> Avatars </label>
+      <label>
+        Scenario:
+        <select id="scenario"></select>
+      </label>
+      <button id="play">▶ Play scenario</button>
+      <button id="reset">Reset</button>
+      <span id="desc" style="opacity: 0.7; font-size: 0.85rem"></span>
+    </header>
+    <main>
+      <div class="chat-frame">
+        <gigi-chat id="chat" show-toolbar></gigi-chat>
+      </div>
+      <section class="events" aria-hidden="true">
+        <h2>Dispatched events (host observability)</h2>
+        <ol id="log"></ol>
+      </section>
+    </main>
+
+    <script type="module">
+      import '@ggcity/gigi-chat';
+      import { playScenario } from './runner.js';
+      import { SCENARIOS, SCENARIO_NAMES } from '../test/fixtures/streams.js';
+
+      const chat = document.getElementById('chat');
+      const select = document.getElementById('scenario');
+      const themeSelect = document.getElementById('theme');
+      const desc = document.getElementById('desc');
+      const logEl = document.getElementById('log');
+
+      // ── Theming ───────────────────────────────────────────────
+      // Built-in light/dark/system ride on the `data-theme` attribute. A fully
+      // custom theme is just a bag of `--gigi-chat-*` CSS custom properties set on
+      // the element — this is exactly how an embedding app would brand it. (Setting
+      // them inline guarantees they win over the OS-auto palette.)
+      const OCEAN = {
+        '--gigi-chat-bg': '#06242b',
+        '--gigi-chat-fg': '#d7f0ee',
+        '--gigi-chat-accent': '#2ec5b6',
+        '--gigi-chat-on-accent': '#052b27',
+        '--gigi-chat-user-bg': '#0d3b3f',
+        '--gigi-chat-assistant-bg': '#0a2f35',
+        '--gigi-chat-border': '#1d4f55',
+        '--gigi-chat-error-fg': '#ff9a8a',
+        '--gigi-chat-focus-ring': '#5ce0d0',
+        '--gigi-chat-disabled-bg': '#0a2a2f',
+        '--gigi-chat-send-disabled-bg': '#19474c',
+        '--gigi-chat-code-bg': 'rgba(255,255,255,0.06)',
+        '--gigi-chat-font': "'Iowan Old Style', Palatino, Georgia, serif",
+        '--gigi-chat-radius': '16px',
+        'color-scheme': 'dark',
+      };
+
+      function applyTheme(mode) {
+        // Clear any custom (Ocean) properties first.
+        for (const k of Object.keys(OCEAN)) chat.style.removeProperty(k);
+        if (mode === 'ocean') {
+          chat.removeAttribute('data-theme'); // let the inline custom vars drive
+          for (const [k, v] of Object.entries(OCEAN)) chat.style.setProperty(k, v);
+        } else if (mode === 'system') {
+          chat.removeAttribute('data-theme'); // follow the OS
+        } else {
+          chat.setAttribute('data-theme', mode); // force light / dark
+        }
+        document.body.dataset.demo = mode; // theme the surrounding demo chrome too
+      }
+
+      themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
+      applyTheme('system');
+
+      // ── Narration position ────────────────────────────────────
+      const narrationPos = document.getElementById('narration-pos');
+      narrationPos.addEventListener('change', () => {
+        chat.setAttribute('narration-position', narrationPos.value);
+      });
+
+      // ── Avatars (per-role, set as CSS custom properties) ──────
+      // Small inline SVGs so the demo is self-contained. Whether avatars show and
+      // which image is used are entirely CSS-driven on the element.
+      const avatar = (bg, fg, ch) =>
+        `url("data:image/svg+xml,${encodeURIComponent(
+          `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><circle cx='20' cy='20' r='20' fill='${bg}'/><text x='20' y='27' font-size='20' text-anchor='middle' fill='${fg}' font-family='sans-serif' font-weight='700'>${ch}</text></svg>`
+        )}")`;
+      const avatarsToggle = document.getElementById('avatars');
+      avatarsToggle.addEventListener('change', () => {
+        if (avatarsToggle.checked) {
+          chat.style.setProperty('--gigi-chat-avatar-display', 'block');
+          chat.style.setProperty('--gigi-chat-assistant-avatar', avatar('#2ec5b6', '#042b27', 'G'));
+          chat.style.setProperty('--gigi-chat-user-avatar', avatar('#6b6b73', '#ffffff', 'U'));
+        } else {
+          chat.style.removeProperty('--gigi-chat-avatar-display');
+          chat.style.removeProperty('--gigi-chat-assistant-avatar');
+          chat.style.removeProperty('--gigi-chat-user-avatar');
+        }
+      });
+
+      // ── Scenarios ─────────────────────────────────────────────
+      for (const name of SCENARIO_NAMES) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+      const updateDesc = () => {
+        desc.textContent = SCENARIOS[select.value]?.description ?? '';
+      };
+      select.addEventListener('change', updateDesc);
+      updateDesc();
+
+      // Mirror every host-facing event into the panel (demonstrates the
+      // observation hooks the shell will use to open tiles).
+      const logEvent = (e) => {
+        const li = document.createElement('li');
+        li.textContent = `${e.type} ${JSON.stringify(e.detail)}`;
+        logEl.prepend(li);
+      };
+      for (const t of [
+        'gigi-submit',
+        'gigi-citation-detected',
+        'gigi-answer-complete',
+        'gigi-citation-click',
+        'gigi-new-session',
+        'gigi-copy',
+      ]) {
+        chat.addEventListener(t, logEvent);
+      }
+
+      let abort;
+      document.getElementById('play').addEventListener('click', async () => {
+        abort?.abort();
+        abort = new AbortController();
+        chat.reset();
+        logEl.innerHTML = '';
+        await playScenario(chat, SCENARIOS[select.value].steps, { signal: abort.signal, speed: 10 });
+      });
+      document.getElementById('reset').addEventListener('click', () => {
+        abort?.abort();
+        chat.reset();
+        logEl.innerHTML = '';
+      });
+    </script>
+  </body>
+</html>

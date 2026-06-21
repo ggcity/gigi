@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["vite/client"],
+    "experimentalDecorators": false
+  },
+  "include": ["src/**/*.js"],
+  "exclude": ["node_modules", "dist"]
+}

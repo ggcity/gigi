@@ -1,0 +1,45 @@
+{
+  "name": "@ggcity/gigi-chat",
+  "version": "0.1.0",
+  "description": "Standalone WCAG 2.1 AA chat web component (Lit) for the Gigi city assistant. Transport-agnostic: no WebSocket, no tiles, no business logic.",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "main": "./dist/gigi-chat.js",
+  "module": "./dist/gigi-chat.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/gigi-chat.js"
+    }
+  },
+  "sideEffects": [
+    "./src/gigi-chat.js",
+    "./dist/gigi-chat.js"
+  ],
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "types": "tsc -p jsconfig.json --emitDeclarationOnly --declaration --allowJs --outDir dist || true",
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:install": "playwright install --with-deps"
+  },
+  "dependencies": {
+    "dompurify": "^3.1.7",
+    "lit": "^3.2.1",
+    "marked": "^14.1.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@playwright/test": "^1.48.2",
+    "axe-core": "^4.10.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
