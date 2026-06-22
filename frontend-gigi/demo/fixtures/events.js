@@ -28,9 +28,15 @@ const CITYHALL_URL = 'https://www.ggcity.org/cityhall';
 const SANITATION_URL = 'https://www.ggcity.org/publicworks/sanitation';
 const BULK_URL = 'https://www.ggcity.org/publicworks/bulk-pickup';
 
-// A visible-tab quote and a hidden-tab quote, both present in demo/city-page.html.
+// Quotes present in demo/city-page.html: a visible paragraph, a hidden Bootstrap tab, a
+// collapsed Bootstrap-4 section. FUZZY_QUOTE is VISIBLE_QUOTE with one corrupted word
+// (Friday→Fridey) so the exact path misses and the companion's fuzzy snap recovers it.
+// ABSENT_QUOTE is not on the page (the DOM-miss path).
 export const VISIBLE_QUOTE = 'City Hall is open Monday through Friday from 7:30 a.m. to 5:30 p.m.';
 export const HIDDEN_QUOTE = 'The business license fee is forty-five dollars per year';
+export const COLLAPSIBLE_QUOTE = 'Overnight parking permits cost twenty dollars per month';
+export const FUZZY_QUOTE = 'City Hall is open Monday through Fridey from 7:30 a.m. to 5:30 p.m.';
+export const ABSENT_QUOTE = 'Dog licenses are issued at the north counter on weekday mornings';
 
 /** Build a streaming turn: session → narration → tokens → answer_done (+highlights). */
 function streamingTurn({ session = 'demo-1', tokens, highlights = [], tokenDelay = 45 }) {
@@ -69,6 +75,24 @@ export const SCENARIOS = {
   hiddenContent: streamingTurn({
     tokens: HAPPY_TOKENS,
     highlights: [{ url: CITYHALL_URL, quote: HIDDEN_QUOTE }],
+  }),
+
+  // Quote inside a collapsed Bootstrap-4 section → companion reveals, then highlights.
+  collapsibleContent: streamingTurn({
+    tokens: HAPPY_TOKENS,
+    highlights: [{ url: CITYHALL_URL, quote: COLLAPSIBLE_QUOTE }],
+  }),
+
+  // A lightly corrupted quote the exact path misses → fuzzy snap recovers the real text.
+  fuzzyMatch: streamingTurn({
+    tokens: HAPPY_TOKENS,
+    highlights: [{ url: CITYHALL_URL, quote: FUZZY_QUOTE }],
+  }),
+
+  // The quote is not on the page → page shown, no highlight, companion reports the miss.
+  domMiss: streamingTurn({
+    tokens: HAPPY_TOKENS,
+    highlights: [{ url: CITYHALL_URL, quote: ABSENT_QUOTE }],
   }),
 
   multiLink: streamingTurn({

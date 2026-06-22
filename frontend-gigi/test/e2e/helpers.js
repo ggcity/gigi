@@ -13,6 +13,10 @@ import { dirname, resolve } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CITY_PAGE = readFileSync(resolve(HERE, '../../demo/city-page.html'), 'utf8');
+// The fixture page loads the REAL companion as a module script. Served at the ggcity.org
+// origin in the suite, so its `/src/companion/companion.js` import resolves there — route
+// that exact path to the source file (registered after the catch-all so it takes priority).
+const COMPANION = readFileSync(resolve(HERE, '../../src/companion/companion.js'), 'utf8');
 
 /**
  * Arm the mocked backend. `scenarios` is either an array of step-lists (one consumed
@@ -23,6 +27,10 @@ const CITY_PAGE = readFileSync(resolve(HERE, '../../demo/city-page.html'), 'utf8
 export async function mockBackend(page, scenarios, { dropTurn = null } = {}) {
   await page.route('https://www.ggcity.org/**', (route) =>
     route.fulfill({ contentType: 'text/html', body: CITY_PAGE })
+  );
+  // Higher-priority (later-registered) route for the companion module the fixture imports.
+  await page.route('https://www.ggcity.org/src/companion/companion.js', (route) =>
+    route.fulfill({ contentType: 'text/javascript', body: COMPANION })
   );
 
   let turn = 0;
@@ -77,4 +85,16 @@ export function tileCards(page) {
 /** FrameLocator into the first (or nth) framed city page. */
 export function tileFrame(page, nth = 0) {
   return page.frameLocator('gigi-tiles iframe').nth(nth);
+}
+
+/** The companion's outcome marker on a framed page (the quote it highlighted, or ''). */
+export function highlightedQuote(frame) {
+  return frame.locator('body').getAttribute('data-gigi-highlighted');
+}
+
+/** Whether the companion painted a highlight in the frame (Custom Highlight API or mark). */
+export function isPainted(frame) {
+  return frame
+    .locator('body')
+    .evaluate(() => (window.CSS && CSS.highlights && CSS.highlights.size > 0) || !!document.getElementById('gigi-hl'));
 }
