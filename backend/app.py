@@ -23,9 +23,11 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
 from .orchestrator import HUMAN_REDIRECT, Orchestrator
@@ -103,6 +105,16 @@ def create_app(deps: Optional[Deps] = None) -> FastAPI:
                 await ws.send_json({"type": "error", "text": f"internal error: {e}"})
             except Exception:
                 pass
+
+    # Serve the built Gigi shell bundle (frontend-gigi/dist) at "/", if present, so the
+    # backend is the single origin in production and in the "prod-like" local run. The
+    # mount is registered LAST so /ws and /healthz take precedence (a "/" mount matches
+    # every path). It is skipped entirely when the bundle hasn't been built, so Phase 1
+    # behavior — and the existing tests — are unchanged when dist/ is absent. html=True
+    # serves index.html for unmatched paths so the SPA entry resolves.
+    dist = Path(__file__).resolve().parent.parent / "frontend-gigi" / "dist"
+    if dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="gigi-shell")
 
     return app
 

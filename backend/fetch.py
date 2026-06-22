@@ -44,6 +44,10 @@ class FetchResult:
     text: str
     cache_hit: bool
     latency_ms: int
+    # Final URL after following redirects (``httpx`` already follows them). Lets the
+    # frontend dedupe tiles whose cited URLs differ but resolve to the same page.
+    # None on a cache hit (the cache stores text only, keyed by the request URL).
+    final_url: str = None
 
 
 def _collapse(text: str) -> str:
@@ -76,7 +80,7 @@ async def fetch_page(url: str, store, settings, *, client: httpx.AsyncClient = N
 
     cached = await asyncio.to_thread(store.cache_get, url)
     if cached is not None:
-        return FetchResult(url=url, text=cached, cache_hit=True, latency_ms=0)
+        return FetchResult(url=url, text=cached, cache_hit=True, latency_ms=0, final_url=None)
 
     t0 = time.perf_counter()
     own_client = client is None
@@ -89,6 +93,7 @@ async def fetch_page(url: str, store, settings, *, client: httpx.AsyncClient = N
     try:
         resp = await client.get(url)
         resp.raise_for_status()
+        final_url = str(resp.url)  # post-redirect URL (follow_redirects=True)
         text = _extract(resp.content, resp.headers.get("content-type", ""), url)
     finally:
         if own_client:
@@ -98,7 +103,7 @@ async def fetch_page(url: str, store, settings, *, client: httpx.AsyncClient = N
     await asyncio.to_thread(
         store.cache_put, url, text, settings.page_cache_ttl_seconds
     )
-    return FetchResult(url=url, text=text, cache_hit=False, latency_ms=latency_ms)
+    return FetchResult(url=url, text=text, cache_hit=False, latency_ms=latency_ms, final_url=final_url)
 
 
 async def fetch_cited(sources: List[Dict[str, Any]], store, settings) -> Dict[str, FetchResult]:

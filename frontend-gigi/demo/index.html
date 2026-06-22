@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gigi shell — offline demo</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        font-family: system-ui, sans-serif;
+      }
+      header {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 10px 14px;
+        border-bottom: 1px solid #ccc;
+        background: #fff;
+      }
+      header label {
+        font-size: 0.9rem;
+      }
+      header select,
+      header button {
+        font: inherit;
+        padding: 5px 9px;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        background: #f7f7f8;
+      }
+      .hint {
+        opacity: 0.7;
+        font-size: 0.82rem;
+      }
+      main {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      gigi-app {
+        display: block;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Gigi shell — offline demo</strong>
+      <label>
+        Theme:
+        <select id="theme">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="ocean">Ocean (custom)</option>
+        </select>
+      </label>
+      <label>
+        Next answer:
+        <select id="scenario"></select>
+      </label>
+      <span class="hint">Type any question and send — the chosen scenario streams back. Tiles frame a local fixture page so highlights are visible without a backend.</span>
+    </header>
+    <main>
+      <gigi-app></gigi-app>
+    </main>
+
+    <script type="module">
+      // 1) Install the mock socket BEFORE the shell loads (GigiSocket captures
+      //    window.WebSocket at construction time).
+      import { installMockWebSocket, setScenario } from './mock-ws.js';
+      import { SCENARIO_NAMES } from './fixtures/events.js';
+      installMockWebSocket();
+
+      // 2) Now load the shell (registers <gigi-app> → upgrades the element).
+      await import('../src/gigi-app.js');
+
+      const app = document.querySelector('gigi-app');
+      await app.updateComplete;
+
+      // Point tiles at the bundled fixture page (with the companion stub) so
+      // highlighting is visible offline. In production tiles frame the cited page itself.
+      const tiles = app.renderRoot.querySelector('gigi-tiles');
+      tiles.resolveSrc = (url) => '/demo/city-page.html?from=' + encodeURIComponent(url);
+
+      // Scenario picker.
+      const select = document.getElementById('scenario');
+      for (const name of SCENARIO_NAMES) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+      select.addEventListener('change', () => setScenario(select.value));
+
+      // Theme: built-in light/dark/system ride on data-theme; "ocean" is a fully
+      // custom palette set as --gigi-shell-* properties (exactly how an operator brands it).
+      const OCEAN = {
+        '--gigi-shell-bg': '#04181d',
+        '--gigi-shell-surface': '#072a30',
+        '--gigi-shell-fg': '#d7f0ee',
+        '--gigi-shell-muted': '#8fc4c0',
+        '--gigi-shell-accent': '#2ec5b6',
+        '--gigi-shell-on-accent': '#042b27',
+        '--gigi-shell-border': '#16454b',
+        '--gigi-shell-focus-ring': '#5ce0d0',
+        '--gigi-shell-font': "'Iowan Old Style', Palatino, Georgia, serif",
+        '--gigi-shell-radius': '18px',
+        'color-scheme': 'dark',
+      };
+      const themeSelect = document.getElementById('theme');
+      function applyTheme(mode) {
+        for (const k of Object.keys(OCEAN)) app.style.removeProperty(k);
+        if (mode === 'ocean') {
+          app.removeAttribute('data-theme');
+          for (const [k, v] of Object.entries(OCEAN)) app.style.setProperty(k, v);
+        } else if (mode === 'system') {
+          app.removeAttribute('data-theme');
+        } else {
+          app.setAttribute('data-theme', mode);
+        }
+      }
+      themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
+    </script>
+  </body>
+</html>

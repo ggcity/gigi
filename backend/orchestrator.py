@@ -242,7 +242,12 @@ class Orchestrator:
                     fetch_latency_ms=fr.latency_ms)
                 self._dbg(f"  highlight {url}: quote={v.quote!r}  snap={'ok' if snapped else 'None'}")
                 if snapped:
-                    await emit({"type": "highlight", "url": url, "quote": snapped})
+                    # final_url (post-redirect) lets the frontend dedupe tiles that
+                    # resolve to the same page; None on a cache hit.
+                    evt = {"type": "highlight", "url": url, "quote": snapped}
+                    if fr.final_url and fr.final_url != url:
+                        evt["final_url"] = fr.final_url
+                    await emit(evt)
                     highlights.append({"url": url, "quote": snapped})
         return highlights
 

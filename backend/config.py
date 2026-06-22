@@ -17,6 +17,28 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 
+def load_env_file(path: str = None) -> None:
+    """Populate ``os.environ`` from a simple ``KEY=VALUE`` config file (a repo-root
+    ``.env`` by default, or ``GIGI_ENV_FILE``). Dependency-free: blank lines and
+    ``#`` comments are skipped, surrounding quotes stripped, and values already set
+    in the real environment are NOT overridden (an explicit launch-time ``TOP_K=…``
+    wins over the file). Missing file is a no-op."""
+    path = path or os.environ.get("GIGI_ENV_FILE", ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except FileNotFoundError:
+        pass
+
+
 def _env(name: str, fallback: str) -> str:
     return os.environ.get(name, fallback)
 
@@ -68,7 +90,7 @@ class Settings:
     chroma_path: str = "./chroma_db"
     chroma_collection: str = "city_website_content"
     embedding_model: str = "BAAI/bge-large-en-v1.5"
-    top_k: int = 5
+    top_k: int = 20
     min_score: float = 0.3
     max_history_messages: int = 6
 
@@ -101,6 +123,8 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        # Load an optional .env config file first (does not override real env vars).
+        load_env_file()
         return cls(
             answer_model=_env("ANTHROPIC_MODEL", cls.answer_model),
             highlight_model=_env("HIGHLIGHT_MODEL", cls.highlight_model),

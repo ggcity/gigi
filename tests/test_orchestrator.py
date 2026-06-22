@@ -27,6 +27,18 @@ def make_fetcher(pages):
     return _fetch_cited
 
 
+def make_fetcher_final(pages, final_url):
+    async def _fetch_cited(sources, store, settings):
+        out = {}
+        for s in sources:
+            url = urldefrag(s.get("url", "")).url
+            if url in pages and url not in out and len(out) < settings.max_cited_urls:
+                out[url] = FetchResult(url=url, text=pages[url], cache_hit=False,
+                                       latency_ms=1, final_url=final_url)
+        return out
+    return _fetch_cited
+
+
 async def _boom_fetcher(sources, store, settings):
     raise AssertionError("fetch must not be called")
 
@@ -80,6 +92,18 @@ async def test_streams_answer_then_highlights(fake_client, embedder, collection,
     ct = call_types(store, iid)
     assert ct[0] == "answer" and "highlight" in ct          # no rewrite/verify calls
     assert "rewrite" not in ct and "verify" not in ct
+
+
+@pytest.mark.asyncio
+async def test_highlight_carries_final_url(fake_client, embedder, collection, store, settings):
+    # When the cited page redirected, the post-redirect URL rides on the highlight
+    # event so the frontend can dedupe tiles that resolve to the same page.
+    final = "https://www.ggcity.org/finance/water-billing"
+    orch = build_orch(fake_client, embedder, collection, store, settings,
+                      fetcher=make_fetcher_final(PAGES, final))
+    events, _ = await run_turn(orch)
+    hl = [e for e in events if e["type"] == "highlight"][0]
+    assert hl.get("final_url") == final
 
 
 @pytest.mark.asyncio

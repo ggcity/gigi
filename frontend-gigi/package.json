@@ -1,0 +1,26 @@
+{
+  "name": "@ggcity/gigi-shell",
+  "version": "0.1.0",
+  "description": "Gigi app shell (Lit): owns the WebSocket to the backend, embeds <gigi-chat>, opens cited city pages as tiled iframes, drives the centered→side morph. The Gigi-specific glue around the standalone chat module.",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:install": "playwright install --with-deps"
+  },
+  "dependencies": {
+    "@ggcity/gigi-chat": "file:../chat-module",
+    "lit": "^3.2.1",
+    "motion": "^11.11.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@playwright/test": "^1.48.2",
+    "axe-core": "^4.10.2",
+    "vite": "^5.4.10"
+  }
+}

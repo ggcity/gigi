@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Garden Grove City Hall (fixture)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 16px;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      h1 {
+        font-size: 1.3rem;
+      }
+      .nav-tabs {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0 8px;
+        border-bottom: 1px solid #767676;
+      }
+      .nav-tabs button {
+        font: inherit;
+        padding: 6px 12px;
+        color: #1a1a1a;
+        border: 1px solid #767676;
+        border-bottom: none;
+        background: #ededed;
+        cursor: pointer;
+        border-radius: 8px 8px 0 0;
+      }
+      .nav-tabs button.is-active {
+        background: #fff;
+        font-weight: 600;
+      }
+      .tab-pane[hidden] {
+        display: none;
+      }
+      mark#gigi-hl {
+        background: #fff2a8;
+        outline: 2px solid #b58900;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      FIXTURE city page for Phase 3 local testing. It carries a known body and a
+      Bootstrap-style tab so the highlight path can be exercised end-to-end. The
+      <script> below is a COMPANION STUB only — the real companion (Phase 4) does
+      strict origin allow-listing, fuzzy matching, the Custom Highlight API, and miss
+      reporting. This stub just proves the shell→iframe contract:
+        - accepts {type:'gigi-highlight', quote} from its embedder (window.parent),
+        - reveals the containing tab if hidden, marks the matching text,
+        - posts back {type:'gigi-tile-result', found, url, quote}.
+    -->
+    <h1>City Hall</h1>
+    <p id="intro">
+      Welcome to the City of Garden Grove. City Hall is open Monday through Friday from 7:30 a.m. to
+      5:30 p.m. and is closed on alternate Fridays.
+    </p>
+
+    <div class="nav-tabs">
+      <button class="is-active" data-bs-toggle="tab" data-bs-target="#hours">Hours</button>
+      <button data-bs-toggle="tab" data-bs-target="#fees">Fees</button>
+    </div>
+    <div class="tab-content">
+      <div class="tab-pane" id="hours">
+        <p>Parking is free in the visitor lot during business hours.</p>
+      </div>
+      <div class="tab-pane" id="fees" hidden>
+        <p>The business license fee is forty-five dollars per year, due each January.</p>
+      </div>
+    </div>
+    <p><a id="nav-link" href="?p=2">Go to the next page</a></p>
+
+    <script>
+      (function () {
+        // Signal the embedding shell that we are navigating to a new page, so it can
+        // show a per-tile loading bar (#7). The real Phase 4 companion does the same.
+        function signalNavigating() {
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({ type: 'gigi-navigating' }, '*');
+            }
+          } catch (e) {}
+        }
+        window.addEventListener('beforeunload', signalNavigating);
+        var navLink = document.getElementById('nav-link');
+        if (navLink) navLink.addEventListener('click', signalNavigating);
+
+        var norm = function (s) {
+          return (s || '').replace(/\s+/g, ' ').trim();
+        };
+
+        // Reveal the tab-pane containing a node, if hidden (the real companion clicks
+        // the data-bs-toggle control; the stub just unhides the pane).
+        function reveal(node) {
+          var el = node.parentElement;
+          while (el && !el.classList.contains('tab-pane')) el = el.parentElement;
+          if (el && el.hidden) {
+            el.hidden = false;
+            var target = '#' + el.id;
+            var btns = document.querySelectorAll('[data-bs-target]');
+            for (var i = 0; i < btns.length; i++) {
+              btns[i].classList.toggle('is-active', btns[i].getAttribute('data-bs-target') === target);
+            }
+          }
+        }
+
+        function findAndHighlight(quote) {
+          var target = norm(quote);
+          if (!target) return false;
+          var prev = document.getElementById('gigi-hl');
+          if (prev) prev.removeAttribute('id'); // clear a previous highlight
+          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+          var node;
+          while ((node = walker.nextNode())) {
+            if (node.parentElement && node.parentElement.tagName === 'SCRIPT') continue;
+            if (norm(node.textContent).indexOf(target) !== -1) {
+              reveal(node);
+              var mark = document.createElement('mark');
+              mark.id = 'gigi-hl';
+              mark.textContent = node.textContent;
+              node.parentNode.replaceChild(mark, node);
+              mark.scrollIntoView({ block: 'center' });
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function handle(quote, replyTo, replyOrigin) {
+          var found = findAndHighlight(quote);
+          document.body.setAttribute('data-gigi-highlighted', found ? quote : '');
+          if (replyTo) {
+            try {
+              replyTo.postMessage(
+                { type: 'gigi-tile-result', found: found, url: location.href, quote: quote },
+                replyOrigin || '*'
+              );
+            } catch (e) {}
+          }
+        }
+
+        // Channel 1: postMessage from the embedding shell (desktop tiles).
+        window.addEventListener('message', function (ev) {
+          if (ev.source !== window.parent) return; // only our embedder
+          var data = ev.data;
+          if (!data || data.type !== 'gigi-highlight') return;
+          handle(data.quote, ev.source, ev.origin);
+        });
+
+        // Channel 2 (Phase 5 scaffold): a #gigi= hash carries the quote for standalone
+        // / mobile opens with no parent. Read it once, then strip it.
+        try {
+          var m = /#gigi=([^&]+)/.exec(location.hash);
+          if (m) {
+            handle(decodeURIComponent(m[1]), null, null);
+            history.replaceState(null, '', location.pathname + location.search);
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>
