@@ -1,96 +1,87 @@
----
-title: Gigi City Assistant
-emoji: 🏛️
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: "6.19.0"
-app_file: app.py
-pinned: false
----
+# Gigi — City Assistant
 
-
-# City Website RAG Chatbot (Local Edition)
-
-A RAG chatbot that helps residents navigate city services. This edition runs
-the vector store and embeddings locally and calls Claude over the Anthropic API.
+Gigi is a RAG chatbot that helps Garden Grove residents navigate city services. Ask a question and Gigi streams an answer grounded in content from ggcity.org, opens cited pages as side-by-side previews, and highlights the exact supporting text on the page.
 
 ## Architecture
 
-- Crawler (`website_crawler.py`): crawls a city website, extracts text + factual
-  metadata (dates, PII heuristic, URL stats), embeds chunks, stores in Chroma
-- Classifier (`classify.py`): a separate, re-runnable LLM pass that labels each
-  page (document type, department, record status) for retention review
-- Vector store: Chroma (local, persistent directory)
-- Embeddings: BGE-large (`BAAI/bge-large-en-v1.5`) via sentence-transformers
-- Chatbot ("Gigi", `city_chatbot.py`): conversational assistant. Answers with
-  Claude Sonnet 4.6 (`claude-sonnet-4-6`); a cheap Haiku call rewrites follow-ups
-  into standalone search queries so multi-turn context works
-- Interface: Gradio with streaming responses
-
-`rag_embeddings.py` is shared by the crawler and chatbot so the embedding model,
-dimension, normalization, and query handling cannot drift apart.
+- **Crawler** (`website_crawler.py`): breadth-first crawl of the city website. Extracts HTML, PDF, and DOCX text, chunks it, embeds with BGE-large, and upserts to ChromaDB.
+- **Backend** (`backend/`): FastAPI server. Each query retrieves from ChromaDB, streams a Sonnet answer with inline citations over WebSocket, then asynchronously fetches cited pages and asks Haiku to find the exact supporting span for in-page highlighting.
+- **Chat UI** (`chat-module/`): standalone WCAG 2.1 AA Lit web component. Transport-agnostic — no WebSocket, no tiles.
+- **App shell** (`frontend-gigi/`): Lit application that owns the WebSocket, opens cited city pages as tiled iframes, and drives the centered→side layout morph.
+- **Companion** (`frontend-gigi/src/companion/companion.js`): vanilla script injected into every city page by Drupal. Receives highlight quotes via postMessage, reveals hidden Bootstrap tabs or collapsibles, and highlights the passage via the CSS Custom Highlight API.
+- **Shared library** (`shared/`): embedding contract, text extraction, and RAG core reused by the crawler and backend.
 
 ## Prerequisites
 
 - Python 3.9+
+- Node.js 20+
 - An Anthropic API key
-- About 1.3GB of disk for the BGE-large weights (downloaded on first run)
-- GPU optional. CPU works; a GPU mainly speeds up the one-time crawl embedding.
+- ~1.3 GB disk for BGE-large weights (downloaded on first run, cached by sentence-transformers)
+- A populated ChromaDB vector store (see [Crawl the site](#1-crawl-the-site))
 
 ## Setup
 
-Install torch first, matched to your hardware, then the rest.
+### Python
 
-CPU-only box:
+Install PyTorch first, matched to your hardware:
 
 ```bash
+# CPU-only:
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-```
 
-GPU box (CUDA). Check your CUDA version with `nvidia-smi`, then pick the matching
-wheel (the official selector is at https://pytorch.org/get-started/locally/):
-
-```bash
-# cu121 / cu124 / cu126 are common; choose the closest <= your driver's CUDA
+# GPU (CUDA 12.4 — check your driver with nvidia-smi and pick the closest):
 pip install torch --index-url https://download.pytorch.org/whl/cu124
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
-Then:
+Then install backend and crawler dependencies:
 
 ```bash
 pip install -r crawler_requirements.txt
-pip install -r chatbot_requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...
+pip install -r backend_requirements.txt
 ```
 
-Optional, to bound CPU threads per request on a shared box:
+Copy the example env file and fill in the required values:
 
 ```bash
-export OMP_NUM_THREADS=8
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY, CHROMA_PATH, CHROMA_COLLECTION
+```
+
+### JavaScript
+
+```bash
+cd chat-module && npm install
+cd ../frontend-gigi && npm install
 ```
 
 ## 1. Crawl the site
 
 ```bash
 python website_crawler.py \
-  --base-url https://your-city-website.com \
+  --base-url https://www.ggcity.org \
   --db-path ./chroma_db \
   --collection-name city_website_content
 ```
 
-On a GPU box, add `--device cuda` to run embedding on the GPU (much faster for
-large PDFs). Re-running upserts by URL (no wipe); pass `--recreate` to rebuild.
-The crawl prints a summary by file type, year, and potential-PII flag. Document
-type and department are NOT set here; they come from the classifier in step 2.
+Re-running the crawler upserts by URL — it does not wipe the store. Pass `--recreate` to rebuild from scratch. On a GPU machine, add `--device cuda` for faster embedding.
 
-Performance note: embedding cost scales with chunk count, not page count, and
-large PDFs (budget books, master plans) can be hundreds of chunks each. On CPU
-this dominates runtime. Options: raise `--chunk-size`, lower `--max-file-size-mb`,
-use `--skip-pdf`, or run with `--device cuda`.
+**Useful options:**
 
-## 2. Classify pages for retention (optional, decision-support)
+| Flag | Description |
+|---|---|
+| `--sitemap URL` | Seed from the CMS sitemap instead of the start page |
+| `--max-depth N` | Limit link depth from start page |
+| `--max-pages N` | Hard cap on pages crawled |
+| `--skip-pdf` | Skip PDF files (recommended if PDFs are slow or noisy) |
+| `--skip-spreadsheets` | Skip XLS/XLSX/CSV files |
+| `--exclude-pattern REGEX` | Skip URLs matching the regex (repeatable) |
+| `--include-pattern REGEX` | Only crawl URLs matching at least one regex |
+| `--allow-subdomains` | Also follow subdomains of the start domain |
+| `--device cuda` | Run embedding on GPU |
+
+Curation matters. Auto-generated list, search, and calendar pages share keywords with real content and crowd out relevant results — exclude them with `--exclude-pattern`.
+
+## 2. Classify pages for retention (optional)
 
 ```bash
 python classify.py \
@@ -99,120 +90,112 @@ python classify.py \
   --model claude-haiku-4-5-20251001
 ```
 
-Reads the crawled corpus, classifies each unique page with Haiku into a fixed
-taxonomy (document type, department, record status, confidence, rationale), and
-writes the labels back onto every chunk of that page. Re-runnable: it skips
-pages already labeled unless you pass `--reclassify`. Use `--summary-only` to
-print the current counts without calling the model. Edit the taxonomy lists at
-the top of `classify.py` to match the city's actual retention schedule.
+Labels each page with document type, department, and record status via Haiku and writes those labels back onto the chunks. Re-runnable; skips already-labeled pages unless you pass `--reclassify`. Use `--summary-only` to print current counts without calling the model.
 
-IMPORTANT: these labels are automated suggestions to support a records officer's
-review. They are not an authority for retention or destruction decisions.
+These labels are automated suggestions for a records officer's review, not authoritative retention decisions.
 
-## 3. Start the chatbot
+## 3. Run in development
+
+Start the backend and frontend in separate terminals:
 
 ```bash
-python city_chatbot.py \
-  --db-path ./chroma_db \
-  --collection-name city_website_content \
-  --model-name claude-sonnet-4-6
+# Terminal 1 — backend (auto-reload on code changes):
+uvicorn backend.app:create_app --factory --reload --port 8000
+
+# Terminal 2 — frontend dev server (proxies /ws to :8000):
+cd frontend-gigi && npm run dev
 ```
 
-Open http://localhost:7860
+Open http://localhost:5173. The Vite dev server proxies WebSocket connections to the backend, so both run on one origin with no CORS setup.
 
-Gigi introduces herself on the first turn and keeps conversation context: a
-Haiku call rewrites each follow-up into a standalone query for retrieval, and the
-recent turns are passed to Sonnet for the answer (capped by `--max-history`).
-Sources are linked inline in the answer (markdown links), and a Sources list is
-also appended below unless you pass `--no-footer`.
-
-The `--db-path` and `--embedding-model` MUST match what the crawler used, or
-retrieval breaks. Classification is not required for the chatbot to work; the
-chatbot retrieves by vector similarity and ignores the classification labels.
-
-## Crawl scope and stopping
-
-By default the crawler is breadth-first and stays on the start URL's exact host.
-It keeps going until it runs out of in-scope links, so on a large site it will
-try to crawl everything. Bound it with:
-
-- `--max-depth N`: link depth from the start page. `0` = only the start page,
-  `1` = start page plus pages it links to, etc. Unlimited if unset.
-- `--max-pages N`: hard cap on pages crawled (counts successful pages; failed
-  fetches still log but do not count). Unlimited if unset.
-- `--allow-subdomains`: also follow subdomains of the start domain (default:
-  same host only, so `www.city.gov` will not follow `docs.city.gov`).
-- `--skip-pdf`: do not fetch or process PDFs (by extension and content-type).
-- `--skip-spreadsheets`: do not fetch or process spreadsheets (xls, xlsx, xlsm,
-  csv, tsv, ods). Useful because spreadsheets embed poorly and can surface as
-  noisy citations.
-- `--exclude-pattern REGEX` (repeatable): skip URLs matching the regex. Use this
-  to keep auto-generated/templated pages out of the index, e.g. paginated record
-  lists and query-string traps:
-  `--exclude-pattern 'annual_permits' --exclude-pattern '\?year='`
-- `--include-pattern REGEX` (repeatable): only crawl URLs matching at least one
-  regex. Use to restrict a crawl to a section of the site.
-- `--sitemap URL`: seed the crawl from a sitemap instead of just the start page.
-  Handles a sitemap index and gzipped sub-sitemaps. The listed URLs become the
-  depth-0 set, so the crawl covers what the CMS considers canonical content.
-  Combine with `--max-depth 1` for a hybrid: sitemap pages plus one hop of the
-  pages they link to. All filters (exclude patterns, robots, skip-pdf, etc.)
-  still apply to both the seeds and the branched links.
-
-A Drupal sitemap lists Drupal-managed content, so seeding from it tends to
-exclude bolted-on non-Drupal apps (paginated record viewers, etc.) by
-construction. Note it may also omit some legitimate pages or files that are
-configured out of the sitemap.
-
-Curation matters more than coverage. Indexing auto-generated list/search/
-calendar pages pollutes retrieval: their boilerplate shares keywords with real
-questions and crowds out the pages that actually answer them. Exclude them.
-
-It restricts to the start URL's domain automatically; off-site links are
-skipped, and robots.txt is fetched and enforced.
-
-## Key options
-
-Crawler: `--embedding-model`, `--device`, `--chunk-size`, `--chunk-overlap`,
-`--max-concurrent`, `--recreate`, `--max-depth`, `--max-pages`,
-`--allow-subdomains`, `--skip-pdf`, `--skip-spreadsheets`, `--exclude-pattern`, `--include-pattern`, `--sitemap`
-
-Classifier: `--model`, `--concurrency`, `--reclassify`, `--summary-only`
-
-Chatbot: `--model-name`, `--rewrite-model`, `--max-history`, `--no-footer`, `--top-k`, `--min-score`, `--temperature`, `--max-tokens`, `--share`
-
-`--min-score` is genuine cosine similarity in [0, 1] (1 = identical). Start
-around 0.3 and tune.
-
-`--temperature` defaults to 0.0 (most deterministic). Temperature is a weak
-hallucination control: the real levers are retrieval quality (`--min-score`,
-`--top-k`) and the grounding instructions in the system prompt.
-
-## Inspect and test retrieval
+To test the backend without a browser:
 
 ```bash
-python query_test.py --list                                  # every crawled page
-python query_test.py --query "how do I pay my water bill"    # ranked results + similarity
-python classify.py --summary-only                            # current label counts
+python -m backend.cli --query "how do I pay my water bill"
+python -m backend.cli              # interactive REPL
+python -m backend.cli --no-highlight  # skip the async highlight pass
 ```
 
-`--list` and `--summary-only` do not load the embedding model or call the API.
-Use `query_test.py` similarity numbers to choose a `--min-score` for the chatbot.
+## 4. Build for production
+
+```bash
+cd frontend-gigi && npm run build
+```
+
+This produces `frontend-gigi/dist/`: the app bundle (`index.html` + assets) and the standalone companion script (`companion.js`). The FastAPI backend serves `dist/` at `/` automatically — no separate static host needed.
+
+Start the production server:
+
+```bash
+uvicorn backend.app:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Sit this behind your existing reverse proxy. The proxy should:
+- Route `/ws` as a WebSocket upgrade to the backend
+- Route everything else to the backend as HTTP
+
+For the companion and tiled iframes to work, city pages must allow the Gigi origin to frame them:
+
+```
+Content-Security-Policy: frame-ancestors 'self' https://gigi.ggcity.org
+```
+
+Drop any conflicting `X-Frame-Options` header. The companion script (`companion.js`) is injected into the Drupal template on every city page.
+
+## Configuration
+
+All backend settings are read from environment variables or a `.env` file. The most important ones:
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | *(required)* | Anthropic API key |
+| `CHROMA_PATH` | `./chroma_db` | Path to the ChromaDB directory |
+| `CHROMA_COLLECTION` | `city_website_content` | Collection name (must match crawler) |
+| `SQLITE_PATH` | `./gigi.db` | SQLite database path |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Model for answer generation |
+| `REWRITE_MODEL` | `claude-haiku-4-5-20251001` | Model for follow-up query rewrite |
+| `HIGHLIGHT_MODEL` | `claude-haiku-4-5-20251001` | Model for highlight span extraction |
+| `HIGHLIGHT_ENABLED` | `true` | Toggle async in-page highlighting |
+| `TOP_K` | `8` | Number of chunks to retrieve |
+| `MIN_SCORE` | `0.3` | Minimum cosine similarity threshold |
+| `MAX_HISTORY` | `6` | Max prior turns passed to the model |
+| `ALLOWED_FETCH_HOSTS` | `ggcity.org` | Hosts the backend may fetch for highlighting (SSRF guard) |
+| `RATE_LIMIT_PER_IP` | `60` | Requests per IP per rate window |
+| `RATE_LIMIT_PER_SESSION` | `30` | Requests per session per rate window |
+| `RATE_WINDOW_SECONDS` | `60` | Rate limit window duration |
+| `GIGI_ENV_FILE` | `.env` | Path to a custom env file |
+
+`--min-score` is genuine cosine similarity in [0, 1]. Start around 0.3 and tune up if retrieval is returning irrelevant chunks.
+
+## Inspect retrieval quality
+
+```bash
+python query_test.py --list                                   # every crawled page
+python query_test.py --query "how do I apply for a permit"    # ranked results with similarity scores
+python classify.py --summary-only                             # current classification label counts
+```
+
+`--list` and `--summary-only` do not load the embedding model or call any API.
+
+## Run tests
+
+```bash
+# Python backend tests:
+pytest tests/
+
+# Frontend end-to-end and accessibility (requires browser install on first run):
+cd frontend-gigi && npm run test:install && npm test
+cd chat-module && npm run test:install && npm test
+```
+
+The Playwright suite covers happy-path streaming, tile lifecycle, companion highlight, hidden-content reveal, and accessibility (axe-core integrated).
 
 ## Notes and limitations
 
-- Concurrency: a single Gradio process is bound by the Python GIL for the
-  CPU-bound query embedding. Fine for staff or a pilot. For many simultaneous
-  residents, run multiple worker processes or split the embedder into its own
-  service.
-- Language: BGE-large-en is English-tuned. Swap `--embedding-model` for a
-  multilingual model if resident content is not primarily English.
-- Aggregations: summaries are computed in Python over Chroma metadata. Fine at
-  city scale; for very large corpora consider pgvector.
-- Fragment URLs: the crawler currently treats `page#section` as distinct from
-  `page`, which can cause duplicate fetches. Known minor issue.
-- Tested with chromadb 1.5.x, gradio 6.x, anthropic 0.109.x. Lock the ranges in
-  the requirements files to what installs cleanly on your machine.
-- Data flow: crawled content and the crawler's PII flags stay local. The final
-  prompt plus retrieved context goes to the Anthropic API (chatbot), and page
-  text goes to the Anthropic API during classification (`classify.py`). 
+- **Embedding model must match**: `CHROMA_COLLECTION` and `EMBEDDING_MODEL` must be identical between the crawler run and the running backend. A mismatch causes silent retrieval failure.
+- **Single-machine SQLite**: fine at pilot scale. Multi-instance deployment needs an external store.
+- **Highlight is best-effort**: if the backend cannot fetch a cited page or snap the quote to a true substring, the tile opens without a highlight. The answer has already streamed and is unaffected.
+- **JS-rendered sections**: the crawler fetches static HTML; sections built client-side after page load may not be in the index and may cause companion misses.
+- **PII in logs**: user queries are stored in `interactions.user_query` for debuggability. This makes the interaction log a PII store. A retention and redaction policy is required before production deployment (City AR 2.16).
+- **Language**: BGE-large-en is English-tuned. Swap `EMBEDDING_MODEL` for a multilingual model for non-English content.
+- **WCAG 2.1 AA**: target compliance date April 26, 2027. The chat module was built to conformance. A full-system audit covering the shell, tiles, and companion is required before launch.
