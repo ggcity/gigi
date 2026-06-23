@@ -108,7 +108,7 @@ export class GigiSocket {
   /** Forward a companion DOM-miss report (Phase 4 acts on it; backend logs it now). */
   sendTileResult(detail) {
     if (this._ws && this._ws.readyState === 1) {
-      this._send({ type: 'tile_result', ...detail, session_id: this._sessionId || undefined });
+      this._send({ ...detail, type: 'tile_result', session_id: this._sessionId || undefined });
     }
   }
 
