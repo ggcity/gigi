@@ -1,0 +1,13 @@
+<!-- Source artwork for the PWA / favicon icon set. Derived from the inline hero logo in
+     src/gigi-app.js (a rounded speech bubble with three dots) on the city-blue field.
+     This is a PLACEHOLDER — replace it with the real brand asset, then regenerate the
+     PNG icon set with: npm run gen:icons  (see scripts/gen-icons.mjs).
+     Keep it square (the generator resizes it to each target). -->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" fill="#0b5cab" />
+  <rect x="96" y="120" width="320" height="248" rx="64" fill="#ffffff" />
+  <path d="M150 360 L150 432 L228 360 Z" fill="#ffffff" />
+  <circle cx="192" cy="244" r="26" fill="#0b5cab" />
+  <circle cx="256" cy="244" r="26" fill="#0b5cab" />
+  <circle cx="320" cy="244" r="26" fill="#0b5cab" />
+</svg>

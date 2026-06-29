@@ -2,8 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover lets the shell paint into the notch/safe areas (the ≤900px
+         layout then insets the chat with env(safe-area-inset-*)). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Gigi — City of Garden Grove Assistant</title>
+
+    <!-- Installable PWA: manifest + icons + theme color. No service worker (no offline);
+         "Add to Home Screen" / "Install" still yields a themed standalone Gigi.
+         theme-color values track --gigi-shell-accent / bg in src/styles.js. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#0b5cab" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f141b" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Gigi" />
+
     <style>
       html,
       body {
@@ -17,6 +33,9 @@
       gigi-app {
         display: block;
         height: 100%;
+        /* Dynamic viewport height on mobile: the composer stays above the browser
+           chrome / on-screen keyboard. Falls back to 100% where dvh is unsupported. */
+        height: 100dvh;
       }
     </style>
   </head>

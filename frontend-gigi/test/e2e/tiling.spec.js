@@ -104,6 +104,33 @@ test('#2 mobile viewport hides tiles and gives the chat full width', async ({ pa
   expect(m.paneWidth).toBeGreaterThan(m.vw - 2); // fills the viewport width
 });
 
+test('#2 mobile: tapping a citation opens a #gigi= deep link in a new tab', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  const quote = 'pay your water bill';
+  const scenario = turn({
+    tokens: ['See ', link('Water', gg('water')), '.'],
+    highlights: [{ url: gg('water'), quote }],
+  });
+  await mockBackend(page, [scenario]);
+  await gotoApp(page);
+  // Capture window.open instead of actually opening a tab (mobile has no tiles).
+  await page.evaluate(() => {
+    window.__opened = [];
+    window.open = (u, t, f) => (window.__opened.push({ u, t, f }), null);
+  });
+  await ask(page, 'water bill?');
+  await expect(page.locator('gigi-chat .content').filter({ hasText: 'Water' })).toBeVisible();
+  // Wait until the post-answer highlight quote has registered in the shell.
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector('gigi-app')._quotes.size))
+    .toBeGreaterThan(0);
+  await page.locator('gigi-chat .content a').first().click();
+  const opened = await page.evaluate(() => window.__opened);
+  expect(opened).toHaveLength(1);
+  expect(opened[0].u).toBe(`${gg('water')}#gigi=${encodeURIComponent(quote)}`);
+  expect(opened[0].t).toBe('_blank');
+});
+
 test('#3 two citations that redirect to the same page dedupe to one tile', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const final = gg('finance/water-billing');

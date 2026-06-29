@@ -173,7 +173,11 @@ export const styles = css`
      .shell.centered / .shell.side rules above. */
   @media (max-width: 900px) {
     .shell {
-      padding: 0;
+      /* Full-bleed, but inset by the device safe areas (notch / home indicator) so the
+         composer and content clear them. env(...) is 0 in a normal browser, so the
+         full-width behavior — and the e2e mobile test — is unchanged off-device. */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+        env(safe-area-inset-left);
       gap: 0;
     }
     .shell .tiles-pane {

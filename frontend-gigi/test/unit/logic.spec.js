@@ -54,6 +54,24 @@ test('urls: canonicalize collapses cosmetic differences', async ({ page }) => {
   expect(r.distinct).toBe(false);
 });
 
+test('urls: buildDeepLink carries the verified quote as a #gigi= fragment', async ({ page }) => {
+  const r = await page.evaluate(async () => {
+    const m = await import('/src/urls.js');
+    return {
+      withQuote: m.buildDeepLink('https://www.ggcity.org/water', 'pay your water bill'),
+      encodes: m.buildDeepLink('https://www.ggcity.org/p', 'a & b'),
+      replacesFrag: m.buildDeepLink('https://www.ggcity.org/p#old', 'q'),
+      emptyQuote: m.buildDeepLink('https://www.ggcity.org/water', ''),
+      noQuote: m.buildDeepLink('https://www.ggcity.org/water'),
+    };
+  });
+  expect(r.withQuote).toBe('https://www.ggcity.org/water#gigi=pay%20your%20water%20bill');
+  expect(r.encodes).toBe('https://www.ggcity.org/p#gigi=a%20%26%20b');
+  expect(r.replacesFrag).toBe('https://www.ggcity.org/p#gigi=q'); // companion owns #gigi=
+  expect(r.emptyQuote).toBe('https://www.ggcity.org/water'); // no fragment without a quote
+  expect(r.noQuote).toBe('https://www.ggcity.org/water');
+});
+
 test('GigiSocket: parses the event protocol and dispatches to handlers', async ({ page }) => {
   const r = await page.evaluate(async () => {
     const { GigiSocket } = await import('/src/ws-client.js');

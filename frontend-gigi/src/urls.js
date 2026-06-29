@@ -106,6 +106,23 @@ export function guardTileUrl(url, allowedHosts = DEFAULT_ALLOWED_TILE_HOSTS, bas
   return { ok: true, href: u.href, origin: u.origin, host };
 }
 
+/**
+ * Build a mobile deep link to a city page that carries a verified highlight quote in a
+ * `#gigi=` fragment. The in-page companion reads that fragment on load and highlights the
+ * quote on arrival (V3.md §2.9, §2.2). When no quote is known the bare URL is returned —
+ * highlights are produced post-answer, so a tap can precede the quote, and the page simply
+ * opens un-highlighted, which is acceptable (V3.md §2.5: highlighting is additive).
+ * Any pre-existing fragment is dropped — the companion owns `#gigi=`.
+ * @param {string} url   an (already allow-listed) city page URL
+ * @param {string} [quote] the verified, snapped page substring
+ * @returns {string}
+ */
+export function buildDeepLink(url, quote) {
+  const base = String(url).split('#')[0];
+  if (!quote) return base === String(url) ? url : base;
+  return `${base}#gigi=${encodeURIComponent(quote)}`;
+}
+
 /** Indirection so tests can run without a real `location`. */
 function locationHref() {
   try {

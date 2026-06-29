@@ -3,7 +3,7 @@ import '@ggcity/gigi-chat'; // registers <gigi-chat>
 import './tiles.js'; // registers <gigi-tiles>
 import { GigiSocket } from './ws-client.js';
 import { animateDock, prefersReducedMotion } from './morph.js';
-import { guardTileUrl, DEFAULT_ALLOWED_TILE_HOSTS } from './urls.js';
+import { guardTileUrl, defrag, buildDeepLink, DEFAULT_ALLOWED_TILE_HOSTS } from './urls.js';
 import { styles, CHAT_BINDINGS } from './styles.js';
 
 const HOLDING_NARRATION = 'Looking this up on the city website…';
@@ -52,12 +52,16 @@ export class GigiApp extends LitElement {
     this._heroLeaving = false;
     this._streaming = false;
     this._allowedHosts = DEFAULT_ALLOWED_TILE_HOSTS;
+    // Verified highlight quotes, keyed by the (defragged) page they land on, so a mobile
+    // citation tap can build a `#gigi=` deep link. Kept across turns (a quote is the page's
+    // own substring, stable regardless of which question surfaced it); cleared on new session.
+    this._quotes = new Map();
 
     this.socket = new GigiSocket({
       onNarration: (t) => this._chat?.setNarration(t),
       onToken: (t) => this._onToken(t),
       onDone: (a) => this._onDone(a),
-      onHighlight: ({ url, quote, final_url }) => this._tilesEl?.highlight(url, quote, final_url),
+      onHighlight: ({ url, quote, final_url }) => this._onHighlight(url, quote, final_url),
       onNotFound: (text, redirect) => this._onNotFound(text, redirect),
       onError: (text) => this._onError(text),
     });
@@ -138,9 +142,26 @@ export class GigiApp extends LitElement {
       this._tilesEl.openTiles(tileable.map((c) => ({ url: c.url, title: c.text })));
     }
   }
+  // Remember the verified quote keyed by the page it lands on (prefer the post-redirect
+  // final_url — that is the page the user actually opens), then highlight the desktop tile.
+  _onHighlight(url, quote, final_url) {
+    if (quote) {
+      const key = defrag(final_url || url);
+      if (key) this._quotes.set(key, quote);
+    }
+    this._tilesEl?.highlight(url, quote, final_url);
+  }
   _onCitationClick({ url, text }) {
     if (guardTileUrl(url, this._allowedHosts).ok) {
-      this._tilesEl.focusOrOpen({ url, title: text });
+      if (isMobile()) {
+        // Mobile: there are no tiles. Open the city page in a NEW tab with the verified
+        // quote in a `#gigi=` fragment so the companion highlights it there, and keep this
+        // conversation alive in the original tab (no service worker restores it). V3.md §2.9.
+        const link = buildDeepLink(url, this._quotes.get(defrag(url)));
+        window.open(link, '_blank', 'noopener');
+      } else {
+        this._tilesEl.focusOrOpen({ url, title: text });
+      }
     } else if (/^(mailto:|tel:)/i.test(url)) {
       window.location.href = url; // let the OS handle mail/dialer
     } else {
@@ -150,6 +171,7 @@ export class GigiApp extends LitElement {
   _onNewSession() {
     this.socket.resetSession();
     this._tilesEl.clear();
+    this._quotes.clear();
     this._started = false;
     this._streaming = false;
   }

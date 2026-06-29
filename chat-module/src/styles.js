@@ -376,4 +376,23 @@ export const styles = css`
       scroll-behavior: smooth;
     }
   }
+
+  /* Touch devices: comfortable tap targets and no iOS focus auto-zoom. Scoped to a
+     coarse pointer so the desktop layout (and its axe snapshots) are untouched. The
+     44px target is WCAG 2.2; included for first-class mobile, ahead of the 2.1 mandate. */
+  @media (pointer: coarse) {
+    .input {
+      min-height: 44px;
+      font-size: 16px; /* ≥16px stops iOS Safari from zooming the page on focus */
+    }
+    .send {
+      min-height: 44px;
+      min-width: 44px;
+    }
+    /* Roomier tap area for citation links in the answer and the Sources list. */
+    .content a,
+    .sources a {
+      padding: 2px 1px;
+    }
+  }
 `;
