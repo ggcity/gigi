@@ -114,14 +114,29 @@ def _extract_claims(kw):
     return out
 
 
+def _decompose_message(kw):
+    """Pull the latest user message out of a decomposition prompt."""
+    content = kw["messages"][-1]["content"]
+    m = re.search(r"(?:Latest message|Message):\s*(.*?)\n\nReturn the search queries",
+                  content, re.S)
+    return m.group(1).strip() if m else content.strip()
+
+
+# Marker the supplement system prompt carries (backend/prompts/supplement.py), used
+# to route a supplement stream to the supplement text instead of the answer text.
+_SUPPLEMENT_MARKER = "PREVIOUS ANSWER ALREADY SHOWN"
+
+
 class _Messages:
     def __init__(self, client):
         self.client = client
 
     def stream(self, **kw):
         # NOT a coroutine: returns an async context manager, like the real SDK.
-        self.client.calls.append({"kind": "stream", "tool": None, "kw": kw})
-        return _Stream(self.client.answer_text)
+        is_supp = _SUPPLEMENT_MARKER in (kw.get("system") or "")
+        self.client.calls.append(
+            {"kind": "stream", "tool": None, "supplement": is_supp, "kw": kw})
+        return _Stream(self.client.supplement_text if is_supp else self.client.answer_text)
 
     async def create(self, **kw):
         tools = kw.get("tools")
@@ -131,9 +146,14 @@ class _Messages:
             results = [{"claim_id": cid, "quote": self.client.highlight_quote}
                        for cid, _text in _extract_claims(kw)]
             return _Resp([_ToolBlock("report_highlights", {"results": results})])
-        # The only non-tool create call is the follow-up retrieval rewrite; return
-        # a text block carrying the scripted standalone query.
-        return _Resp([_TextBlock(self.client.rewrite_text)])
+        if name == "decompose_queries":
+            # Use the scripted query list if set, else echo the message as one query.
+            queries = self.client.decomposed or [_decompose_message(kw)]
+            return _Resp([_ToolBlock("decompose_queries", {"queries": list(queries)})])
+        if name == "report_gap":
+            return _Resp([_ToolBlock("report_gap", {"gap_query": self.client.gap_query})])
+        # Fallback (no current path): a plain text block.
+        return _Resp([_TextBlock("")])
 
 
 class FakeAsyncClient:
@@ -146,9 +166,14 @@ class FakeAsyncClient:
             "or visit City Hall."
         )
         self.highlight_quote = "pay your water bill online"
-        # The rewrite call returns this standalone query; it still retrieves the
-        # water doc in the fixture collection.
-        self.rewrite_text = "pay water bill online"
+        # Decomposition: None -> echo the message as a single query (which still
+        # retrieves the water doc in the fixture collection). Set to a list to script
+        # multiple queries.
+        self.decomposed = None
+        # Gap inspection: "" -> no gap (the default, so most turns get no supplement).
+        self.gap_query = ""
+        # Streamed when a supplement runs (set per test alongside a gap_query).
+        self.supplement_text = "Reach them at (714) 741-5000."
 
     def tool_calls(self, name):
         return [c for c in self.calls if c["tool"] == name]

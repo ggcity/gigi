@@ -90,8 +90,12 @@ async def test_streams_answer_then_highlights(fake_client, embedder, collection,
     row = store.get_interaction(iid)
     assert row["outcome"] == "answered"
     ct = call_types(store, iid)
-    assert ct[0] == "answer" and "highlight" in ct          # no rewrite/verify calls
+    # decompose (retrieval) -> answer -> gap -> highlight; no legacy rewrite/verify.
+    assert ct[0] == "decompose" and "answer" in ct and "highlight" in ct
     assert "rewrite" not in ct and "verify" not in ct
+    # Default gap inspection finds no gap (fake gap_query="") -> no supplement.
+    assert "gap" in ct and "supplement" not in ct
+    assert "supplement_start" not in kinds
 
 
 @pytest.mark.asyncio
@@ -116,7 +120,8 @@ async def test_no_highlight_setting_skips_fetch_and_pass(fake_client, embedder, 
     assert "answer_done" in types(events)
     assert "highlight" not in types(events)
     assert fake_client.tool_calls("report_highlights") == []
-    assert call_types(store, iid) == ["answer"]
+    # Gap inspection is independent of highlighting and still runs (no gap -> no supplement).
+    assert call_types(store, iid) == ["decompose", "answer", "gap"]
 
 
 @pytest.mark.asyncio
@@ -168,27 +173,119 @@ def test_host_allowed_ssrf_guard(settings):
 
 
 @pytest.mark.asyncio
-async def test_followup_rewrites_query_for_retrieval(fake_client, embedder, collection, store, settings):
+async def test_followup_decomposes_query_for_retrieval(fake_client, embedder, collection, store, settings):
     store.create_session("s1")
     store.start_interaction("prev", "s1", "first question")
     store.finish_interaction("prev", outcome="answered", final_answer="A prior answer.")
 
+    # Script a decomposition whose first query differs from the raw message, so the
+    # standalone (rewritten) query is what gets logged on the interaction.
+    fake_client.decomposed = ["pay water bill online"]
     orch = build_orch(fake_client, embedder, collection, store, settings)
     events, iid = await run_turn(orch, query="what about online?")
 
-    # A follow-up (history present) rewrites the query for RETRIEVAL: the rewrite
-    # is the first model call, then the answer.
+    # Decomposition is the first model call (a forced tool call), then the answer.
     ct = call_types(store, iid)
-    assert ct[0] == "rewrite" and ct[1] == "answer"
-    # The rewrite is a non-tool create call.
-    assert any(c["kind"] == "create" and c["tool"] is None for c in fake_client.calls)
-    # The rewritten standalone query is logged on the interaction.
-    assert store.get_interaction(iid)["rewritten_query"] == fake_client.rewrite_text
+    assert ct[0] == "decompose" and ct[1] == "answer"
+    assert fake_client.tool_calls("decompose_queries")
+    # The primary standalone query is logged on the interaction.
+    assert store.get_interaction(iid)["rewritten_query"] == "pay water bill online"
 
-    # The ANSWER still gets the original message + carried history (rewrite is
+    # The ANSWER still gets the original message + carried history (decomposition is
     # retrieval-only — the answer model resolves the follow-up itself).
     stream_kw = fake_client.stream_calls()[0]["kw"]
     msgs = stream_kw["messages"]
     assert len(msgs) > 1
     assert msgs[0]["role"] == "user" and msgs[0]["content"] == "first question"
     assert msgs[-1]["content"] == "what about online?"
+
+
+@pytest.mark.asyncio
+async def test_decomposition_retrieves_each_query_and_merges(fake_client, embedder, collection, store, settings):
+    # Two distinct sub-topics. Each query (against the fixture, min_score=0) returns
+    # BOTH docs, so without merge the retrieval log would have 4 rows; merge dedups
+    # by content to the 2 distinct pages.
+    fake_client.decomposed = ["pay water bill", "building permit fee"]
+    orch = build_orch(fake_client, embedder, collection, store, settings)
+    events, iid = await run_turn(orch, query="water bill and a building permit")
+
+    assert len(fake_client.tool_calls("decompose_queries")) == 1
+    n = store.conn.execute(
+        "SELECT COUNT(*) FROM retrievals WHERE interaction_id=?", (iid,)).fetchone()[0]
+    assert n == 2                                            # merged & deduped, not 4
+    urls = {r[0] for r in store.conn.execute(
+        "SELECT DISTINCT url FROM retrievals WHERE interaction_id=?", (iid,)).fetchall()}
+    assert urls == {"https://www.ggcity.org/water", "https://www.ggcity.org/permits"}
+
+
+@pytest.mark.asyncio
+async def test_gap_triggers_additive_supplement(fake_client, embedder, store, settings):
+    # A collection with two well-separated docs and top_k=1 so the primary query
+    # retrieves only the water doc and the gap query surfaces the (novel) trash doc.
+    import dataclasses
+    import chromadb
+    coll = chromadb.EphemeralClient().get_or_create_collection(
+        name="sup", metadata={"hnsw:space": "cosine"})
+    docs = [
+        "water bill payment online options portal account",
+        "garbage trash pickup schedule collection days route",
+    ]
+    metas = [
+        {"title": "Water Billing", "url": "https://www.ggcity.org/water", "file_type": "html"},
+        {"title": "Trash Schedule", "url": "https://www.ggcity.org/trash", "file_type": "html"},
+    ]
+    coll.upsert(ids=["w", "t"], embeddings=embedder.embed_documents(docs),
+                documents=docs, metadatas=metas)
+
+    st = dataclasses.replace(settings, top_k=1, highlight_enabled=False)
+    fake_client.decomposed = ["water bill payment online"]   # -> water doc only
+    fake_client.gap_query = "garbage trash pickup schedule"  # -> trash doc (novel)
+    fake_client.supplement_text = "Trash is collected on your route's scheduled day."
+
+    orch = Orchestrator(fake_client, embedder, coll, store, st, fetch_cited=_boom_fetcher)
+    events, iid = await run_turn(orch, query="how do I pay my water bill")
+
+    kinds = types(events)
+    assert "supplement_start" in kinds and "supplement_done" in kinds
+    assert kinds.index("answer_done") < kinds.index("supplement_start")
+    assert (kinds.index("supplement_start") < kinds.index("supplement_token")
+            < kinds.index("supplement_done"))
+    ss = [e for e in events if e["type"] == "supplement_start"][0]
+    assert ss["text"] == "Let me find that…"
+    # supplement tokens reconstruct the supplement text.
+    streamed = "".join(e["text"] for e in events if e["type"] == "supplement_token")
+    assert streamed == fake_client.supplement_text
+
+    ct = call_types(store, iid)
+    assert ct == ["decompose", "answer", "gap", "supplement"]
+    # Persisted answer is the main answer + the supplement (additive, not a replacement).
+    final = store.get_interaction(iid)["final_answer"]
+    assert fake_client.answer_text in final and fake_client.supplement_text in final
+
+
+@pytest.mark.asyncio
+async def test_gap_with_no_novel_chunks_skips_supplement(fake_client, embedder, collection, store, settings):
+    # The fixture (min_score=0, top_k=5) retrieves BOTH docs on every query, so any
+    # gap re-retrieval returns only already-seen chunks -> the supplement is skipped.
+    fake_client.gap_query = "water division phone number"
+    orch = build_orch(fake_client, embedder, collection, store, settings)
+    events, iid = await run_turn(orch)
+
+    kinds = types(events)
+    assert "supplement_start" not in kinds and "supplement_done" not in kinds
+    ct = call_types(store, iid)
+    assert "gap" in ct and "supplement" not in ct
+
+
+@pytest.mark.asyncio
+async def test_gap_inspection_disabled(fake_client, embedder, collection, store, settings):
+    import dataclasses
+    st = dataclasses.replace(settings, gap_inspection_enabled=False)
+    fake_client.gap_query = "water division phone number"    # would trigger if enabled
+    orch = build_orch(fake_client, embedder, collection, store, st)
+    events, iid = await run_turn(orch)
+
+    ct = call_types(store, iid)
+    assert "gap" not in ct and "supplement" not in ct
+    assert "supplement_start" not in types(events)
+    assert fake_client.tool_calls("report_gap") == []

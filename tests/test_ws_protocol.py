@@ -102,6 +102,44 @@ def test_rate_limit_rejected_without_model_call(fake_client, embedder, collectio
     assert fake_client.calls == []   # throttled before any model call
 
 
+def test_supplement_event_sequence(fake_client, embedder, store, tmp_path):
+    # A gap supplement streams over the WS after answer_done: supplement_start ->
+    # supplement_token* -> supplement_done. Two separated docs + top_k=1 so the gap
+    # query surfaces a novel chunk; highlight off so the turn ends at supplement_done.
+    import chromadb
+    from backend.config import Settings
+    coll = chromadb.EphemeralClient().get_or_create_collection(
+        name="supws", metadata={"hnsw:space": "cosine"})
+    docs = ["water bill payment online options portal account",
+            "garbage trash pickup schedule collection days route"]
+    metas = [{"title": "Water Billing", "url": WATER_URL, "file_type": "html"},
+             {"title": "Trash Schedule", "url": "https://www.ggcity.org/trash", "file_type": "html"}]
+    coll.upsert(ids=["w", "t"], embeddings=embedder.embed_documents(docs),
+                documents=docs, metadatas=metas)
+    settings = Settings(sqlite_path=str(tmp_path / "g.db"), min_score=0.0, top_k=1,
+                        highlight_enabled=False, rate_limit_per_ip=1000, rate_limit_per_session=1000)
+    fake_client.decomposed = ["water bill payment online"]
+    fake_client.gap_query = "garbage trash pickup schedule"
+    fake_client.supplement_text = "Trash is collected on your route's scheduled day."
+
+    app = _app(fake_client, embedder, coll, store, settings)
+    with TestClient(app) as c:
+        with c.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "query", "text": "how do I pay my water bill", "session_id": "S"})
+            seq = []
+            for _ in range(80):
+                e = ws.receive_json()
+                seq.append(e)
+                if e["type"] == "supplement_done":
+                    break
+
+    kinds = [e["type"] for e in seq]
+    assert "answer_done" in kinds and kinds[-1] == "supplement_done"
+    assert kinds.index("answer_done") < kinds.index("supplement_start")
+    assert "supplement_token" in kinds
+    assert [e for e in seq if e["type"] == "supplement_start"][0]["text"] == "Let me find that…"
+
+
 def test_unknown_event_type(fake_client, embedder, collection, store, settings):
     app = _app(fake_client, embedder, collection, store, settings)
     with TestClient(app) as c:

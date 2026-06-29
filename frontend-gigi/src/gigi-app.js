@@ -51,6 +51,7 @@ export class GigiApp extends LitElement {
     this._started = false;
     this._heroLeaving = false;
     this._streaming = false;
+    this._supplementing = false;
     this._allowedHosts = DEFAULT_ALLOWED_TILE_HOSTS;
     // Verified highlight quotes, keyed by the (defragged) page they land on, so a mobile
     // citation tap can build a `#gigi=` deep link. Kept across turns (a quote is the page's
@@ -61,6 +62,9 @@ export class GigiApp extends LitElement {
       onNarration: (t) => this._chat?.setNarration(t),
       onToken: (t) => this._onToken(t),
       onDone: (a) => this._onDone(a),
+      onSupplementStart: (t) => this._onSupplementStart(t),
+      onSupplementToken: (t) => this._chat?.appendAssistantToken(t),
+      onSupplementDone: (a) => this._onSupplementDone(a),
       onHighlight: ({ url, quote, final_url }) => this._onHighlight(url, quote, final_url),
       onNotFound: (text, redirect) => this._onNotFound(text, redirect),
       onError: (text) => this._onError(text),
@@ -97,6 +101,7 @@ export class GigiApp extends LitElement {
   // ── chat → backend ────────────────────────────────────────────
   _onSubmit(text) {
     this._streaming = false;
+    this._supplementing = false;
     if (!this._started) {
       if (prefersReducedMotion()) {
         this._started = true;
@@ -124,6 +129,19 @@ export class GigiApp extends LitElement {
     if (this._streaming) this._chat.endAssistantMessage(answer);
     this._streaming = false;
   }
+  // An additive supplement streamed after answer_done: a second assistant bubble
+  // beneath the first answer (which stays on screen), introduced by a transient
+  // "Let me find that…" narration.
+  _onSupplementStart(text) {
+    this._chat.setNarration(text || 'Let me find that…');
+    this._chat.beginAssistantMessage();
+    this._streaming = true;
+    this._supplementing = true;
+  }
+  _onSupplementDone(answer) {
+    if (this._streaming) this._chat.endAssistantMessage(answer);
+    this._streaming = false;
+  }
   _onNotFound(text, redirect) {
     this._chat.showNotFound(text, redirect);
     this._streaming = false;
@@ -137,6 +155,13 @@ export class GigiApp extends LitElement {
   _onAnswerComplete({ citations }) {
     // Only frame pure http(s) allow-listed links; mailto:/tel:/off-list are ignored.
     const tileable = (citations || []).filter((c) => guardTileUrl(c.url, this._allowedHosts).ok);
+    if (this._supplementing) {
+      // The supplement is additive: its new page joins the existing tiles rather
+      // than replacing them (the original answer and its tiles stay on screen).
+      this._supplementing = false;
+      for (const c of tileable) this._tilesEl.focusOrOpen({ url: c.url, title: c.text });
+      return;
+    }
     // A new cited answer replaces the tiles; an answer that cites nothing keeps them.
     if (tileable.length) {
       this._tilesEl.openTiles(tileable.map((c) => ({ url: c.url, title: c.text })));
@@ -174,6 +199,7 @@ export class GigiApp extends LitElement {
     this._quotes.clear();
     this._started = false;
     this._streaming = false;
+    this._supplementing = false;
   }
 
   // ── layout / morph ────────────────────────────────────────────
@@ -228,7 +254,7 @@ export class GigiApp extends LitElement {
         </svg>
         <h1 class="hero-title">Gigi</h1>
         <p class="hero-tag">
-          Ask about City of Garden Grove services — hours, permits, payments, and more.
+          Ask about City of Garden Grove services and information.
         </p>
       </div>
     `;

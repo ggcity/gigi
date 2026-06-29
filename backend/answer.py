@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Tuple
 from urllib.parse import urldefrag
 
 from .prompts import answer as answer_prompt
+from .prompts import supplement as supplement_prompt
 
 # [anchor](url) — url stops at whitespace or the closing paren.
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -42,6 +43,37 @@ async def stream_answer(client, model: str, query: str, context: str,
             if text:
                 parts.append(text)
                 await emit({"type": "answer_token", "text": text})
+        final = await stream.get_final_message()
+
+    usage = getattr(final, "usage", None)
+    tokens_in = getattr(usage, "input_tokens", 0) or 0
+    tokens_out = getattr(usage, "output_tokens", 0) or 0
+    return "".join(parts), tokens_in, tokens_out
+
+
+async def stream_supplement(client, model: str, question: str, prior_answer: str,
+                            context: str, sources: List[Dict[str, Any]], today: str,
+                            emit, *, max_tokens: int = 300, temperature: float = 0.0
+                            ) -> Tuple[str, int, int]:
+    """Stream the additive supplement token-by-token through ``emit`` (as
+    ``supplement_token`` events, not ``answer_token``) and return
+    (full_text, tokens_in, tokens_out). Same streaming mechanics as
+    ``stream_answer`` but with the supplement prompt and the prior answer in view."""
+    system = supplement_prompt.system_prompt(context, sources, today, prior_answer)
+    messages = [{"role": "user", "content": question}]
+
+    parts: List[str] = []
+    async with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system=system,
+        messages=messages,
+    ) as stream:
+        async for text in stream.text_stream:
+            if text:
+                parts.append(text)
+                await emit({"type": "supplement_token", "text": text})
         final = await stream.get_final_message()
 
     usage = getattr(final, "usage", None)

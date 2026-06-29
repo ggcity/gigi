@@ -178,3 +178,28 @@ test('a tile can be closed by keyboard and focus returns to the region heading',
   // Layout returns to centered; focus is on the (now sr-only) heading anchor, not lost.
   await expect(page.locator('gigi-app .shell.centered')).toBeVisible();
 });
+
+test('an additive supplement renders a second bubble and adds a tile without replacing the first', async ({ page }) => {
+  // Main answer cites one page; then a gap supplement streams a second bubble that
+  // cites a NEW page. The supplement is additive: the first answer and its tile stay.
+  const steps = turn({ tokens: ['Pay at ', link('Water Billing', 'https://www.ggcity.org/water'), '.'] });
+  const supTokens = ['Call them at ', link('Water Division', 'https://www.ggcity.org/water-division'), '.'];
+  steps.push({ at: 40, event: { type: 'supplement_start', text: 'Let me find that…' } });
+  supTokens.forEach((t, i) =>
+    steps.push({ at: i === 0 ? 40 : 20, event: { type: 'supplement_token', text: t } }));
+  steps.push({ at: 20, event: { type: 'supplement_done', answer: supTokens.join('') } });
+
+  await mockBackend(page, [steps]);
+  await gotoApp(page);
+  await ask(page, 'who do I call about my water bill?');
+
+  // The supplement renders as a SECOND assistant bubble (two assistant messages).
+  await expect(page.locator('gigi-chat .msg-assistant')).toHaveCount(2);
+  await expect(page.getByRole('link', { name: 'Water Division', exact: true })).toBeVisible();
+
+  // The supplement's new page is ADDED as a second tile; the original is not replaced.
+  await expect(tileCards(page)).toHaveCount(2);
+  const titles = (await page.locator('gigi-tiles .card-title').allTextContents()).join(' ');
+  expect(titles).toContain('Water Billing');
+  expect(titles).toContain('Water Division');
+});

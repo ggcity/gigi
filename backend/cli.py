@@ -23,6 +23,7 @@ import asyncio
 import dataclasses
 import json
 import sys
+import time
 
 from .app import build_deps
 from .config import Settings
@@ -37,6 +38,13 @@ def _print_event(event: dict):
         print(f"[narration] {event.get('text','')}")
     elif etype == "answer_done":
         print("\n[answer_done]")
+    elif etype == "supplement_start":
+        print(f"\n[supplement] {event.get('text','')}")
+    elif etype == "supplement_token":
+        sys.stdout.write(event.get("text", ""))
+        sys.stdout.flush()
+    elif etype == "supplement_done":
+        print("\n[supplement_done]")
     elif etype == "highlight":
         print(f"[highlight] {event.get('url')}\n      quote: {event.get('quote')!r}")
     elif etype == "not_found":
@@ -84,8 +92,11 @@ async def _run_query(deps, query: str, session_id: str, quiet: bool):
     async def emit(event):
         _print_event(event)
 
+    t0 = time.perf_counter()
     interaction_id = await deps.orchestrator.handle_turn(query, session_id, emit)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
     print(f"\n[interaction_id] {interaction_id}")
+    print(f"[total] {elapsed_ms} ms (wall clock, includes the async highlight pass)")
     if not quiet:
         _summarize_db(deps.store, interaction_id)
 

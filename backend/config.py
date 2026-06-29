@@ -81,9 +81,9 @@ class Settings:
     # --- models ---
     answer_model: str = "claude-sonnet-4-6"            # streamed prose answer
     highlight_model: str = "claude-haiku-4-5-20251001"  # async highlight-span extraction
-    # Follow-up rewrite, RETRIEVAL ONLY: turns a pronoun-y follow-up into a
-    # standalone Chroma query (feeds the embedder; the answer still uses the
-    # original message + history). Preserves v2's retrieval behavior.
+    # Query decomposition + gap inspection, RETRIEVAL ONLY: turns the message into
+    # 1-3 standalone Chroma queries and (post-answer) inspects for an actionable gap
+    # (feeds the embedder; the answer still uses the original message + history).
     rewrite_model: str = "claude-haiku-4-5-20251001"
 
     # --- retrieval (same env names as app.py) ---
@@ -93,6 +93,16 @@ class Settings:
     top_k: int = 20
     min_score: float = 0.3
     max_history_messages: int = 6
+    # Query decomposition: max standalone queries per turn (the first is always the
+    # primary topic; extras only for distinct sub-topics / entity-attribute gaps).
+    decompose_max_queries: int = 3
+
+    # --- post-stream gap inspection + additive supplement ---
+    # On by default: after the answer streams, one Haiku call checks whether it
+    # referenced an actionable detail (contact/phone/fee/hours) without providing it;
+    # if so and a re-retrieval surfaces new chunks, a short Sonnet supplement streams.
+    gap_inspection_enabled: bool = True
+    supplement_max_tokens: int = 300
 
     # --- generation ---
     max_tokens: int = 1000
@@ -135,6 +145,9 @@ class Settings:
             top_k=_env_int("TOP_K", cls.top_k),
             min_score=_env_float("MIN_SCORE", cls.min_score),
             max_history_messages=_env_int("MAX_HISTORY", cls.max_history_messages),
+            decompose_max_queries=_env_int("DECOMPOSE_MAX_QUERIES", cls.decompose_max_queries),
+            gap_inspection_enabled=_env_bool("GAP_INSPECTION_ENABLED", cls.gap_inspection_enabled),
+            supplement_max_tokens=_env_int("SUPPLEMENT_MAX_TOKENS", cls.supplement_max_tokens),
             max_tokens=_env_int("MAX_TOKENS", cls.max_tokens),
             temperature=_env_float("TEMPERATURE", cls.temperature),
             highlight_enabled=_env_bool("HIGHLIGHT_ENABLED", cls.highlight_enabled),

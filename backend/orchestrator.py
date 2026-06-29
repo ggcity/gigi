@@ -35,6 +35,7 @@ from shared import rag_core
 
 from . import answer as answer_mod
 from . import fetch as fetch_mod
+from . import gap as gap_mod
 from . import highlight as highlight_mod
 from . import rewrite as rewrite_mod
 from .config import Settings
@@ -42,6 +43,9 @@ from .config import Settings
 logger = logging.getLogger(__name__)
 
 EmitFn = Callable[[Dict[str, Any]], Awaitable[None]]
+
+# Shown to the resident while the gap supplement is being retrieved + streamed.
+SUPPLEMENT_NARRATION = "Let me find that…"
 
 NOT_FOUND_TEXT = (
     "I could not find this on the City of Garden Grove website. I don't want to "
@@ -116,38 +120,45 @@ class Orchestrator:
         self._dbg(f"interaction {interaction_id}  session={session_id}")
         self._dbg(f"query: {query!r}  (history: {len(history)} msg)")
 
-        # 2. Retrieval. On a follow-up (history present) a Haiku call rewrites the
-        # message into a standalone query so the embedder finds the right chunks
-        # (v2 behavior, language-agnostic). The answer model still gets the original
-        # query + full history; the rewrite is retrieval-only. First turn: raw query.
-        retrieval_query = query
+        # 2. Retrieval via query decomposition. One Haiku call turns the message into
+        # 1-3 standalone queries (references resolved; extra queries only for distinct
+        # sub-topics or entity-then-attribute gaps). Each is retrieved in parallel and
+        # the results merged by content hash. The answer model still gets the original
+        # query + full history; the queries are retrieval-only.
         rewritten_query = None
-        if history:
-            retrieval_query, tin, tout, lat = await rewrite_mod.rewrite_for_retrieval(
-                self.client, self.settings.rewrite_model, query, history)
-            await self._log_call(
-                state, interaction_id, "rewrite", self.settings.rewrite_model,
-                tokens_in=tin, tokens_out=tout, latency_ms=lat,
-                prompt={"message": query}, response={"rewritten": retrieval_query})
-            if retrieval_query != query:
-                rewritten_query = retrieval_query
-                self._dbg(f"rewrite: {query!r} → {retrieval_query!r}")
-        results = await self._to_thread(
-            rag_core.search_knowledge_base, self.embedder, self.collection,
-            retrieval_query, self.settings.top_k, self.settings.min_score,
-        )
+        queries, tin, tout, lat = await rewrite_mod.decompose_for_retrieval(
+            self.client, self.settings.rewrite_model, query, history,
+            max_queries=self.settings.decompose_max_queries)
+        await self._log_call(
+            state, interaction_id, "decompose", self.settings.rewrite_model,
+            tokens_in=tin, tokens_out=tout, latency_ms=lat,
+            prompt={"message": query}, response={"queries": queries})
+        if queries and queries[0] != query:
+            rewritten_query = queries[0]
+        self._dbg(f"decompose: {query!r} → {queries!r}")
+
+        result_lists = await asyncio.gather(*[
+            self._to_thread(
+                rag_core.search_knowledge_base, self.embedder, self.collection,
+                q, self.settings.top_k, self.settings.min_score)
+            for q in queries
+        ])
+        results = rag_core.merge_results(result_lists, self.settings.top_k)
         for rank, r in enumerate(results):
             await self._to_thread(
                 self.store.log_retrieval, interaction_id, rank,
                 r.get("chroma_id", ""), urldefrag(r.get("url", "")).url, r.get("score", 0.0),
             )
-        retrieval_label = " (rewritten)" if retrieval_query != query else ""
-        self._dbg(f"retrieval{retrieval_label}: {len(results)} chunk(s) >= min_score {self.settings.min_score}")
+        self._dbg(f"retrieval: {len(results)} merged chunk(s) from {len(queries)} "
+                  f"quer{'y' if len(queries) == 1 else 'ies'} >= min_score {self.settings.min_score}")
         for rank, r in enumerate(results):
             self._dbg(f"  [{rank}] score={r.get('score', 0.0):.3f}  {urldefrag(r.get('url','')).url}")
         if not results:
             self._dbg("BRANCH: not_found (no retrieval results)")
             return await self._not_found(state, interaction_id, _emit, t_start, rewritten_query)
+        # Content hashes of the retrieved set — the gap pass (step 4) compares against
+        # these so it only supplements with chunks not already in front of the model.
+        first_hashes = {rag_core.content_key(r.get("content", "")) for r in results}
 
         # 3. Stream the prose answer token-by-token.
         context, sources = rag_core.format_context_and_sources(results)
@@ -166,11 +177,62 @@ class Orchestrator:
         await _emit({"type": "answer_done", "answer": full_text})
         self._dbg(f"answer streamed ({len(full_text)} chars)")
 
-        # 4. Async highlight enhancement (default on, non-blocking the answer).
-        citations = answer_mod.parse_citations(full_text)
-        highlights = await self._run_highlights(state, interaction_id, _emit, citations, sources)
+        # 4. Post-stream gap inspection (default on). One Haiku call decides whether
+        # the answer points at an actionable detail (contact, phone, fee, hours,
+        # address) it did not actually provide. On a gap, retrieve once more; if it
+        # surfaces chunks not already retrieved, stream a short ADDITIVE supplement
+        # after a brief "Let me find that…" indicator. The first answer stays put.
+        supplement_text = ""
+        supplement_sources: List[Dict[str, Any]] = []
+        if self.settings.gap_inspection_enabled:
+            gap_query, tin, tout, lat = await gap_mod.inspect_gap(
+                self.client, self.settings.rewrite_model, query, full_text, queries)
+            await self._log_call(
+                state, interaction_id, "gap", self.settings.rewrite_model,
+                tokens_in=tin, tokens_out=tout, latency_ms=lat,
+                prompt={"query": query, "queries": queries}, response={"gap_query": gap_query})
+            self._dbg(f"gap decision: {gap_query!r}" if gap_query
+                      else "gap decision: none (answer complete)")
+            if gap_query:
+                gap_results = await self._to_thread(
+                    rag_core.search_knowledge_base, self.embedder, self.collection,
+                    gap_query, self.settings.top_k, self.settings.min_score)
+                # Hard guard: only chunks not already in front of the model count.
+                novel = [r for r in gap_results
+                         if rag_core.content_key(r.get("content", "")) not in first_hashes]
+                for i, r in enumerate(novel):
+                    await self._to_thread(
+                        self.store.log_retrieval, interaction_id, len(results) + i,
+                        r.get("chroma_id", ""), urldefrag(r.get("url", "")).url, r.get("score", 0.0))
+                if novel:
+                    self._dbg(f"gap: {len(novel)} novel chunk(s) → supplement")
+                    await _emit({"type": "supplement_start", "text": SUPPLEMENT_NARRATION})
+                    sup_context, supplement_sources = rag_core.format_context_and_sources(novel)
+                    supplement_text, stin, stout = await answer_mod.stream_supplement(
+                        self.client, self.settings.answer_model, query, full_text,
+                        sup_context, supplement_sources, today, _emit,
+                        max_tokens=self.settings.supplement_max_tokens,
+                        temperature=self.settings.temperature)
+                    await self._log_call(
+                        state, interaction_id, "supplement", self.settings.answer_model,
+                        tokens_in=stin, tokens_out=stout,
+                        prompt={"query": query, "gap_query": gap_query,
+                                "sources": [s["url"] for s in supplement_sources]},
+                        response={"answer": supplement_text})
+                    await _emit({"type": "supplement_done", "answer": supplement_text})
+                    self._dbg(f"supplement streamed ({len(supplement_text)} chars)")
+                else:
+                    self._dbg("gap: no novel chunks, no supplement")
 
-        # 5. Persist. citations = the cited pages (deduped), quote filled where highlighted.
+        # 5. Async highlight enhancement (default on, non-blocking). Runs over the
+        # main answer plus any supplement, so a supplement's new citation is
+        # highlighted too (its source page is added to the relevance set).
+        combined_answer = full_text if not supplement_text else f"{full_text}\n\n{supplement_text}"
+        citations = answer_mod.parse_citations(combined_answer)
+        highlights = await self._run_highlights(
+            state, interaction_id, _emit, citations, sources + supplement_sources)
+
+        # 6. Persist. citations = the cited pages (deduped), quote filled where highlighted.
         quote_by_url = {h["url"]: h["quote"] for h in highlights}
         cited_urls, seen = [], set()
         for c in citations:
@@ -180,7 +242,7 @@ class Orchestrator:
         citation_log = [{"url": u, "quote": quote_by_url.get(u, "")} for u in cited_urls]
         await self._to_thread(
             self.store.finish_interaction, interaction_id, rewritten_query=rewritten_query,
-            outcome="answered", final_answer=full_text, citations=citation_log,
+            outcome="answered", final_answer=combined_answer, citations=citation_log,
             regen_count=0, tokens_in=state.tokens_in, tokens_out=state.tokens_out,
             latency_ms=int((time.perf_counter() - t_start) * 1000),
         )

@@ -7,7 +7,10 @@
  * Backend → client events (each also carries `interaction_id`):
  *   session {session_id} · narration {text} · answer_token {text} ·
  *   answer_done {answer} · highlight {url, quote} ·
+ *   supplement_start {text} · supplement_token {text} · supplement_done {answer} ·
  *   not_found {text, redirect_to_human:{label,url,phone}} · error {text}
+ * The supplement_* trio is an optional additive follow-up streamed AFTER answer_done
+ * when the post-stream gap pass found an actionable detail the answer omitted.
  * Client → backend: {type:'query', text, session_id?} and {type:'tile_result', …}.
  *
  * The URL is RELATIVE (`/ws`) with the scheme derived from the page, so the exact
@@ -22,6 +25,9 @@
  * @property {(text: string) => void} [onNarration]
  * @property {(text: string) => void} [onToken]
  * @property {(answer: string) => void} [onDone]
+ * @property {(text: string) => void} [onSupplementStart]
+ * @property {(text: string) => void} [onSupplementToken]
+ * @property {(answer: string) => void} [onSupplementDone]
  * @property {(h: {url: string, quote: string}) => void} [onHighlight]
  * @property {(text: string, redirect: any) => void} [onNotFound]
  * @property {(text: string) => void} [onError]
@@ -155,6 +161,17 @@ export class GigiSocket {
       case 'answer_done':
         this._turnActive = false;
         this.handlers.onDone?.(msg.answer ?? '');
+        break;
+      case 'supplement_start':
+        this._turnActive = true; // a second stream is coming; re-arm the drop guard
+        this.handlers.onSupplementStart?.(msg.text ?? '');
+        break;
+      case 'supplement_token':
+        this.handlers.onSupplementToken?.(msg.text ?? '');
+        break;
+      case 'supplement_done':
+        this._turnActive = false;
+        this.handlers.onSupplementDone?.(msg.answer ?? '');
         break;
       case 'highlight':
         if (msg.url && msg.quote)

@@ -14,11 +14,35 @@ draft prompt instead.
 """
 
 import datetime
+import hashlib
 import logging
 from typing import Dict, List, Tuple
 from urllib.parse import urldefrag
 
 logger = logging.getLogger(__name__)
+
+
+def content_key(content: str) -> str:
+    """Stable hash of a chunk's text. Used to dedupe retrieval results across the
+    decomposed queries of one turn, and to detect which chunks a later gap query
+    surfaced that were NOT already retrieved."""
+    return hashlib.sha1((content or "").encode("utf-8")).hexdigest()
+
+
+def merge_results(result_lists: List[List[Dict]], top_k: int) -> List[Dict]:
+    """Merge the per-query Chroma result lists from query decomposition into one
+    ranked set. The query variants overlap, so deduplicate by chunk content
+    (``content_key``), keep the highest ``score`` seen for each, and return the top
+    ``top_k`` by score. Pure function (V3.md section 7)."""
+    best: Dict[str, Dict] = {}
+    for results in result_lists:
+        for r in results or []:
+            key = content_key(r.get("content", ""))
+            cur = best.get(key)
+            if cur is None or r.get("score", 0.0) > cur.get("score", 0.0):
+                best[key] = r
+    merged = sorted(best.values(), key=lambda r: r.get("score", 0.0), reverse=True)
+    return merged[:top_k]
 
 
 def today_str() -> str:

@@ -82,6 +82,9 @@ test('GigiSocket: parses the event protocol and dispatches to handlers', async (
         onNarration: (t) => calls.push(['narration', t]),
         onToken: (t) => calls.push(['token', t]),
         onDone: (a) => calls.push(['done', a]),
+        onSupplementStart: (t) => calls.push(['supplement_start', t]),
+        onSupplementToken: (t) => calls.push(['supplement_token', t]),
+        onSupplementDone: (a) => calls.push(['supplement_done', a]),
         onHighlight: (h) => calls.push(['highlight', h.url, h.quote]),
         onNotFound: (t, redir) => calls.push(['not_found', t, redir?.phone]),
         onError: (t) => calls.push(['error', t]),
@@ -92,6 +95,9 @@ test('GigiSocket: parses the event protocol and dispatches to handlers', async (
     s._handleData(JSON.stringify({ type: 'narration', text: 'looking' }));
     s._handleData(JSON.stringify({ type: 'answer_token', text: 'A' }));
     s._handleData(JSON.stringify({ type: 'answer_done', answer: 'A.' }));
+    s._handleData(JSON.stringify({ type: 'supplement_start', text: 'Let me find that…' }));
+    s._handleData(JSON.stringify({ type: 'supplement_token', text: 'B' }));
+    s._handleData(JSON.stringify({ type: 'supplement_done', answer: 'B.' }));
     s._handleData(JSON.stringify({ type: 'highlight', url: 'u', quote: 'q' }));
     s._handleData(JSON.stringify({ type: 'not_found', text: 'nope', redirect_to_human: { phone: '(714) 741-5000' } }));
     s._handleData(JSON.stringify({ type: 'error', text: 'boom' }));
@@ -103,6 +109,9 @@ test('GigiSocket: parses the event protocol and dispatches to handlers', async (
   expect(r.calls).toContainEqual(['narration', 'looking']);
   expect(r.calls).toContainEqual(['token', 'A']);
   expect(r.calls).toContainEqual(['done', 'A.']);
+  expect(r.calls).toContainEqual(['supplement_start', 'Let me find that…']);
+  expect(r.calls).toContainEqual(['supplement_token', 'B']);
+  expect(r.calls).toContainEqual(['supplement_done', 'B.']);
   expect(r.calls).toContainEqual(['highlight', 'u', 'q']);
   expect(r.calls).toContainEqual(['not_found', 'nope', '(714) 741-5000']);
   expect(r.calls).toContainEqual(['error', 'boom']);

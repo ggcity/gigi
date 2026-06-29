@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-Follow-up query rewrite for retrieval (async).
+Query decomposition for retrieval (async).
 
-On a follow-up turn the raw message ("what's her background") lacks the entity
-the embedder needs, so retrieval misses. This runs one small Haiku call to
-rewrite the message into a standalone search query, resolving references against
-the conversation history. It is RETRIEVAL-ONLY: the answer model still receives
-the original message plus the full history, so it resolves "her" from context
-itself; the rewrite just feeds Chroma a query with the entity spelled out.
+Replaces the v2 single-query rewrite. One small Haiku call turns the resident's
+message into 1-3 standalone search queries (``backend/prompts/decompose.py``): the
+first resolves references against history, and extra queries are added only for
+distinct sub-topics or entity-then-attribute gaps. The orchestrator retrieves each
+in parallel and merges by content hash. This is RETRIEVAL-ONLY: the answer model
+still receives the original message plus full history, so it resolves follow-ups
+itself; the queries only feed Chroma.
 
-This is the v2 behavior (``shared/rag_core.rewrite_query``), reproduced here for
-the backend's ``AsyncAnthropic`` client. The PROMPT is shared from
-``shared.rag_core`` (``REWRITE_SYSTEM`` / ``rewrite_user_prompt``) so the wording
-never drifts from the sync Gradio path. Language-agnostic: references are
-resolved by the model, not a word list.
+The call is forced through the ``decompose_queries`` tool for structured output
+(mirroring ``backend/highlight.py``). On any error it falls back to ``[message]``,
+preserving the old raw-message behavior.
 """
 
 import logging
 import time
 from typing import Dict, List, Tuple
 
-from shared.rag_core import REWRITE_SYSTEM, rewrite_user_prompt
+from .prompts import decompose as decompose_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -30,30 +29,39 @@ def _usage(resp):
     return (getattr(usage, "input_tokens", 0) or 0, getattr(usage, "output_tokens", 0) or 0)
 
 
-async def rewrite_for_retrieval(client, model: str, message: str,
-                                history: List[Dict]) -> Tuple[str, int, int, int]:
-    """Rewrite ``message`` into a standalone retrieval query using ``history``.
+def _tool_input(resp, tool_name: str):
+    for block in getattr(resp, "content", []) or []:
+        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == tool_name:
+            return block.input
+    return None
 
-    Returns ``(rewritten_query, tokens_in, tokens_out, latency_ms)``. Falls back
-    to the raw ``message`` (with zero token usage) on any error, mirroring v2.
-    Callers should only invoke this when ``history`` is non-empty.
+
+async def decompose_for_retrieval(client, model: str, message: str, history: List[Dict],
+                                  max_queries: int = 3) -> Tuple[List[str], int, int, int]:
+    """Decompose ``message`` into 1-``max_queries`` standalone retrieval queries.
+
+    Returns ``(queries, tokens_in, tokens_out, latency_ms)``. ``queries`` is never
+    empty: it falls back to ``[message]`` (with zero token usage) on any error,
+    mirroring the v2 raw-message fallback.
     """
     t0 = time.perf_counter()
     try:
         resp = await client.messages.create(
             model=model,
-            max_tokens=80,
+            max_tokens=200,
             temperature=0,
-            system=REWRITE_SYSTEM,
-            messages=[{"role": "user", "content": rewrite_user_prompt(message, history)}],
+            system=decompose_prompt.SYSTEM_PROMPT,
+            messages=[{"role": "user",
+                       "content": decompose_prompt.user_prompt(message, history)}],
+            tools=[decompose_prompt.DECOMPOSE_TOOL],
+            tool_choice={"type": "tool", "name": decompose_prompt.TOOL_NAME},
         )
         latency_ms = int((time.perf_counter() - t0) * 1000)
-        text = "".join(
-            b.text for b in getattr(resp, "content", []) or []
-            if getattr(b, "type", None) == "text"
-        ).strip()
+        payload = _tool_input(resp, decompose_prompt.TOOL_NAME) or {}
+        queries = [str(q).strip() for q in (payload.get("queries") or []) if str(q).strip()]
+        queries = queries[:max_queries]
         tokens_in, tokens_out = _usage(resp)
-        return (text or message, tokens_in, tokens_out, latency_ms)
+        return (queries or [message], tokens_in, tokens_out, latency_ms)
     except Exception as e:
-        logger.warning(f"Query rewrite failed, using raw message: {e}")
-        return (message, 0, 0, int((time.perf_counter() - t0) * 1000))
+        logger.warning(f"Query decomposition failed, using raw message: {e}")
+        return ([message], 0, 0, int((time.perf_counter() - t0) * 1000))
